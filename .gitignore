@@ -1,0 +1,44 @@
+# 数据 — 大文件，不入 git
+data/
+*.csv
+*.parquet
+*.feather
+*.h5
+
+# 凭据 — 永远不能入 git
+.env
+*.env
+secrets/
+credentials.json
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# MT5 / 回测产出
+*.log
+backtest_results/
+ea_logs/
