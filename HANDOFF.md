@@ -26,7 +26,7 @@
 
 ## 已经识别的 XAUUSD 关键坑
 
-- IC Raw Spread 黄金**通常 commission-free**（需在 Specification 里确认 commission 字段）
+- IC Raw Spread XAUUSD commission：**Seychelles 实体 (Raw Trading Ltd, `ICMarketsSC-MT5`) 不是免佣 — $3.5/lot/side = $7/lot 全程**。免佣只适用 AU 实体 (`ICMarkets-MT5`)。脚本默认按 Seychelles 算，因为用户 live 在那。(Verified 2026-05-10.)
 - **三倍 swap 通常在周三**（不是周五）
 - 美东 17:00 前后流动性骤降、点差爆炸 —— 回测必须剔除
 - **1 lot = 100 oz**；1 个 pip ≈ 1 美元/0.01 lot（容易和外汇 pip 混淆）

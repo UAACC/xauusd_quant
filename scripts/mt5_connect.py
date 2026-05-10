@@ -31,7 +31,9 @@ except ImportError:
 
 
 SYMBOL = "XAUUSD"
-DATA_DIR = Path.home() / "xauusd_quant" / "data"
+# Anchor at repo root (scripts/.. = project root) so CSVs land in <repo>/data
+# regardless of where the script is invoked from or what Path.home() resolves to.
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 
 # ---------------------------------------------------------------------------
@@ -46,18 +48,37 @@ class CostModel:
     tick_value: float           # 1 tick * 1 lot 的美金价值
     spread_points: int          # 当前点差(以 point 为单位)
     stops_level: int            # 最小止损/止盈距离(point)
-    swap_long: float            # 多头隔夜利息
-    swap_short: float           # 空头隔夜利息
-    swap_3day_index: int        # 哪一天三倍展期 (MT5: 0..6, 一般 3=Wed)
+    swap_long: float            # 多头隔夜利息(原始值, 单位由 swap_mode 决定)
+    swap_short: float           # 空头隔夜利息(同上)
+    swap_mode: int              # MT5 SYMBOL_SWAP_MODE_*: 1 = points (我们目前只支持这个)
+    swap_3day_index: int        # 哪一天三倍展期 (MT5: 0..6, IC XAUUSD = 3=Wed)
     margin_initial: float       # 1 lot 初始保证金
-    commission_roundtrip_usd: float = 0.0  # IC Raw Spread 黄金通常 = 0, 用户确认后改
+    commission_roundtrip_usd: float
 
     def spread_cost_usd_per_lot(self) -> float:
         """单笔开仓只算点差的成本(美金/手)."""
         return self.spread_points * self.tick_value
 
     def total_roundtrip_usd_per_lot(self) -> float:
+        """点差 + 双边佣金, 不含 swap (swap 取决于持仓时长)."""
         return self.spread_cost_usd_per_lot() + self.commission_roundtrip_usd
+
+    def _swap_to_usd_per_lot(self, raw_swap: float) -> float:
+        # SYMBOL_SWAP_MODE_POINTS=1: raw 值是 price points; 1 point on 1 lot
+        # 美金价值 = point * contract_size  (前提: 盈利货币 = USD).
+        # 其他 swap_mode (currency / interest / reopen) 之后碰到再实现.
+        if self.swap_mode != 1:
+            raise NotImplementedError(
+                f"swap_mode={self.swap_mode} not supported; only POINTS (1) handled. "
+                f"扩展时参考 MT5 SYMBOL_SWAP_MODE_* 枚举."
+            )
+        return raw_swap * self.point * self.contract_size
+
+    def swap_long_usd_per_night(self) -> float:
+        return self._swap_to_usd_per_lot(self.swap_long)
+
+    def swap_short_usd_per_night(self) -> float:
+        return self._swap_to_usd_per_lot(self.swap_short)
 
 
 # ---------------------------------------------------------------------------
@@ -90,9 +111,24 @@ def init_mt5(
         print(f"[ERROR] account_info / terminal_info 返回 None: {mt5.last_error()}")
         return False
 
+    # SAFETY: refuse to proceed if we accidentally bound to a non-demo terminal.
+    # MT5's account_info().trade_mode: 0=demo, 1=contest, 2=real. We only ever
+    # want this script touching demo data; a wrong-terminal bind on a multi-MT5
+    # box could otherwise pull live spec / fire orders against a real account.
+    if acct.trade_mode == 2:
+        print(
+            f"[ABORT] Bound to LIVE account {acct.login} on {acct.server!r}. "
+            f"Refusing to continue. Pass terminal_path= pointing to the demo "
+            f"install's terminal64.exe.",
+            file=sys.stderr,
+        )
+        mt5.shutdown()
+        return False
+
+    mode_label = {0: "DEMO", 1: "CONTEST", 2: "REAL"}.get(acct.trade_mode, "?")
     print(f"[OK] Connected.")
     print(f"     Server   : {acct.server}")
-    print(f"     Account  : {acct.login}  ({'DEMO' if 'Demo' in acct.server else 'LIVE?'})")
+    print(f"     Account  : {acct.login}  ({mode_label})")
     print(f"     Balance  : {acct.balance} {acct.currency}   Leverage: 1:{acct.leverage}")
     print(f"     Terminal : {term.name} build {term.build}  connected={term.connected}")
     return True
@@ -124,7 +160,7 @@ def get_symbol_info(symbol: str = SYMBOL):
     return info
 
 
-def build_cost_model(info, commission_roundtrip_usd: float = 0.0) -> CostModel:
+def build_cost_model(info, commission_roundtrip_usd: float) -> CostModel:
     return CostModel(
         contract_size=info.trade_contract_size,
         point=info.point,
@@ -135,6 +171,7 @@ def build_cost_model(info, commission_roundtrip_usd: float = 0.0) -> CostModel:
         stops_level=info.trade_stops_level,
         swap_long=info.swap_long,
         swap_short=info.swap_short,
+        swap_mode=info.swap_mode,
         swap_3day_index=info.swap_rollover3days,
         margin_initial=info.margin_initial,
         commission_roundtrip_usd=commission_roundtrip_usd,
@@ -185,9 +222,9 @@ def save_history(df: pd.DataFrame, symbol: str = SYMBOL) -> Path | None:
     if df.empty:
         return None
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    csv = DATA_DIR / f"{symbol}_M1_{datetime.utcnow():%Y%m%d_%H%M%S}.csv"
+    csv = DATA_DIR / f"{symbol}_M1_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.csv"
     df.to_csv(csv)
-    print(f"\n[OK] saved {len(df):,} bars → {csv}")
+    print(f"\n[OK] saved {len(df):,} bars -> {csv}")
     return csv
 
 
@@ -195,12 +232,20 @@ def save_history(df: pd.DataFrame, symbol: str = SYMBOL) -> Path | None:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> int:
-    # ---- 改这里: 从 IC Markets 后台抄你 demo 账户的凭据 ----
-    # 如果你已经在 MT5 终端 GUI 里手动登录, 这三个全留 None 即可
-    LOGIN: int | None = None        # e.g. 51234567
-    PASSWORD: str | None = None     # e.g. "xxx"
-    SERVER: str | None = None       # e.g. "ICMarketsSC-Demo"
-    TERMINAL_PATH: str | None = None  # 多终端时指定 terminal64.exe 全路径
+    # 多终端环境(live + demo): TERMINAL_PATH 必须指向 demo 那个终端的
+    # terminal64.exe, 否则 mt5.initialize() 可能绑到 live. init_mt5() 里
+    # 还有一道 trade_mode==2 的硬性 abort 兜底.
+    # LOGIN/PASSWORD/SERVER 留 None 时, mt5.initialize() 复用终端当前会话.
+    LOGIN: int | None = None
+    PASSWORD: str | None = None
+    SERVER: str | None = None
+    TERMINAL_PATH: str | None = r"F:\demo-mt5\terminal64.exe"
+
+    # IC Markets Raw Trading Ltd (Seychelles) XAUUSD commission, verified from
+    # MT5 Specification 2026-05-10: $3.5/lot per side, charged in/out
+    # → $7/lot round-trip. NOT zero. (HANDOFF.md 早期写错了, 已修正.)
+    # 提醒: IC AU 实体 (ICMarkets-MT5) 的黄金才是 commission-free, 别混.
+    COMMISSION_ROUNDTRIP_USD = 7.0
 
     if not init_mt5(LOGIN, PASSWORD, SERVER, TERMINAL_PATH):
         return 1
@@ -212,11 +257,14 @@ def main() -> int:
 
         get_latest_tick(SYMBOL)
 
-        # IC Raw Spread 黄金通常免佣金, 先按 0 算; 你在 Specification 里看到 commission 字段后改这里
-        cost = build_cost_model(info, commission_roundtrip_usd=0.0)
+        cost = build_cost_model(info, commission_roundtrip_usd=COMMISSION_ROUNDTRIP_USD)
         print(f"\n=== Cost model ===")
-        print(f"  spread cost / lot : ${cost.spread_cost_usd_per_lot():.2f}")
-        print(f"  roundtrip / lot   : ${cost.total_roundtrip_usd_per_lot():.2f}")
+        print(f"  spread (current)        : {cost.spread_points} pts -> ${cost.spread_cost_usd_per_lot():.2f}/lot")
+        print(f"  commission r/t / lot    : ${cost.commission_roundtrip_usd:.2f}")
+        print(f"  total r/t (excl. swap)  : ${cost.total_roundtrip_usd_per_lot():.2f}/lot")
+        print(f"  swap long  / lot / night: ${cost.swap_long_usd_per_night():+.2f}")
+        print(f"  swap short / lot / night: ${cost.swap_short_usd_per_night():+.2f}")
+        print(f"  triple-swap day index   : {cost.swap_3day_index} (3=Wed)")
 
         df = get_history_m1(SYMBOL, days_back=30)
         save_history(df, SYMBOL)

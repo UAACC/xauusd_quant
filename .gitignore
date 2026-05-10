@@ -1,5 +1,6 @@
 # 数据 — 大文件，不入 git
-data/
+# 注意: 用 /data/ 锚定项目根, 否则会误伤 quant/data/ 这种子模块
+/data/
 *.csv
 *.parquet
 *.feather
@@ -9,7 +10,10 @@ data/
 .env
 *.env
 secrets/
-credentials.json
+credentials
+credentials.*
+credentials*
+*.creds
 *.key
 *.pem
 
@@ -33,6 +37,7 @@ env/
 .idea/
 *.swp
 *.swo
+.claude/
 
 # OS
 .DS_Store
