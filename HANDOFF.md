@@ -1,7 +1,7 @@
 # XAUUSD CFD 量化项目 — 交接文档
 
 > 把这份文档完整粘给新机器上的 Claude Code 当第一条消息，就能接上之前的进度。
-> 最后更新：**2026-05-10 (Sunday)** by 用户 + Claude Opus 4.7
+> 最后更新：**2026-05-11 (Monday 13:04 Calgary / 19:04 UTC)** by 用户 + Claude Opus 4.7
 
 ---
 
@@ -9,11 +9,20 @@
 
 - **阶段 0 完整闭环 ✅**：环境、连接、读路径、写路径、demo 实盘单全部跑通
 - **阶段 1 第一波 ✅**：数据基础设施 + broker timezone robustness + cost model 校准
-- **阶段 1 第二波（进行中）**：策略研究 — 正在还原一个朋友描述的 SMC/BOS 反转策略
-- **Repo**：https://github.com/UAACC/xauusd_quant ，main 分支，最新 commit `9f57143`
+- **阶段 1 第二波 — Bollinger baseline ✅**：教学回测跑完，验证 cost-stack 杀伤力（gross +$828 → all-in -$312 on best params）
+- **阶段 1 第二波 — SMC/BOS 反转策略（进行中）**：等朋友答 15 个澄清问题后开 Phase 1
+- **Repo**：https://github.com/UAACC/xauusd_quant ，main 分支，最新 commit `8692204`（5/11 fixture 由用户在 GitHub web UI 创建）
   - identity: per-repo `UAACC` / `61613205+UAACC@users.noreply.github.com`
   - **不带** `Co-Authored-By: Claude` trailer
-- **未推送**：当前所有提交还在本地，等用户决定何时 push
+- **已推送**：本地 == origin/main 同步，工作树干净
+- **commit 历史**（5/10 起）:
+  ```
+  8692204  Create XAUUSD_2026-05-11.json                (web UI, 用户睡前)
+  abcc3b9  feat(backtest): BB mean-revert + bar-level engine
+  ec78df2  docs: comprehensive HANDOFF update
+  9f57143  feat(stage-1): tick/bar pipeline + spec + live monitor + clock-aware UTC
+  4f6e5a4  Initial project structure
+  ```
 
 ## 2. 项目背景（不要重新讨论的事项）
 
@@ -242,7 +251,7 @@ Phase 5: walk-forward 跨更长样本 (拉 1-2 年 H4)
 ```
 
 ### 8.5 阻塞：等用户朋友回答 15 个澄清问题
-**已发给用户**，待回（5 月 10 日傍晚）。最关键的 5 个：
+**已发给用户**，5/10 傍晚发出，**5/11 下午仍未回**（朋友可能要几天才有空整理）。最关键的 5 个：
 1. 入场点是 break 还是 retest 还是 hold-confirmed？
 2. SL 放哪（4510 下还是 retest low 下）？— 这决定 R:R 是 1:0.6 还是 1:5+
 3. TP 4770 的 FVG 来自哪 3 根 bar？
@@ -329,11 +338,37 @@ Demo MT5:      F:\demo-mt5\terminal64.exe
 凭据 (本地, 不入 repo): credentials  (放在 repo 根, 已被 .gitignore 排除)
 ```
 
-## 12. 当前未推进的事项
+## 12. 当前未推进的事项 (2026-05-11 19:04 UTC 快照)
 
-- **live_monitor 当前在用户终端挂着**，持续采集今晚 / 明早数据 — 不要 kill
-- **task #16 (re-pull historical with UTC)** 还没做 — 今晚或明天空窗时跑
-- **task #15 (broker timezone fix)** 已完成
-- 用户**朋友的 15 题答复**未到 — 阻塞 SMC 策略 Phase 1 的开始
-- **Stage 1 后续模块**（spread_surface / swap_calendar / qa）未开始 — 跟 SMC 并行做或先做都可以
-- 当前 commit `9f57143` 在本地 main，**未 push** — 用户决定何时推
+- **live_monitor 已停**（用户睡前 Ctrl+C，最后 flush 在 2026-05-11 04:35 UTC ≈ 22:35 Sunday Calgary）
+  - 5/10 22:06 - 5/11 04:35 UTC 共采到 **162,673 ticks**（约 6.5h 活市数据）
+  - 实测 spread P50 = 10 pts, P95 = 14 pts（跟历史 7 天数据一致，cost model 假设进一步验证）
+  - 想继续采集需要重启：`python scripts/live_monitor.py`
+- **task #16 (re-pull historical with UTC)** 仍 pending — 一行 `--force` 就能跑（Monday 活市数据丰富时机最好）
+- **5/11 fixture 已 verify 为真数据**（不是占位）— diff vs 5/10 显示：所有 static / commission / swap / margin / stops_level **全部 unchanged**（broker 没偷改任何成本结构 ✓）
+- **用户朋友 15 题答复仍未到**（>24h）— SMC Phase 1 仍阻塞
+- **Stage 1 后续模块**（spread_surface / swap_calendar / qa）未开始 — 不阻塞 SMC，可并行
+- **Repo state**：本地 main == origin/main 同步，工作树干净。最新 commit `8692204`。
+
+## 13. 已经讨论过的概念（用户已掌握，不要再从零讲）
+
+- **spread 的物理 + 财务含义**：ask - bid 的差，每笔交易必付的隐性成本
+  - 公式：spread_pts = (ask - bid) / point；$ cost = spread × contract × lot
+  - 时段分布：液态 P50 ≈ 10pt，亚盘 P50 ≈ 15pt，NY 17:00 滚动结算 P95 > 50pt
+- **point vs pip vs tick**：XAUUSD 上三者基本同义，均 = 0.01 USD/oz
+- **commission vs spread**：IC Raw Spread 把两者显性分开（spread 浮动 + commission $7/lot 固定），比"零佣金"账户对量化研究友好
+- **swap (overnight financing)**：持仓过夜利息；XAUUSD 短偏置当前拿正 carry ~+$48/lot/night
+- **slippage**：你 click 的价 vs 实际成交价的差，是 spread 之外的额外摩擦
+- **filling mode IOC**：MT5 订单填充模式之一，部分成交剩余取消（IC XAUUSD 的默认）
+- **broker time vs UTC**：MT5 返回的 time_msc 是 broker 本地墙钟（EEST UTC+3）当 epoch 用，不是真 UTC（必须用 `BrokerClock` 转换）
+- **R:R (risk-reward ratio)**：止损距离 vs 止盈距离的比；R:R 1:2 意味输 1 元为了赚 2 元；胜率门槛 = 1/(1+R:R)
+- **Hedge mode vs Netting**：IC demo 用 Hedge，可同时持多空仓位（不自动 net）
+- **BOS / FVG / Wyckoff / SMC**：Smart Money Concepts 术语；BOS = Break of Structure（趋势转折信号），FVG = Fair Value Gap（3-bar 价格真空）
+
+## 14. 用户当前心智状态 (重要)
+
+- **已经放弃**"找到 90% 胜率剥头皮"幻想，接受现实 retail benchmark (Sharpe 1.0-1.5)
+- **接受**"先扎实研究 3-6 个月再上实盘"的时间预期
+- **专注**于把朋友的 SMC 策略系统化（认可它比 BB 指标更有经济解释）
+- **会问基础概念澄清**（比如 "spread 到底是啥"）— 不要因为之前讲过就跳过解释，他会主动问
+- **不接受**timing-conservative 建议（不要说"等更好时段再做"，他要执行）
