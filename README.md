@@ -34,16 +34,22 @@ HANDOFF.md      项目交接文档（机器迁移用）
 
 ## 安装
 
-```bash
-pip install -r requirements.txt
+```powershell
+# uv (推荐, ~10x 快于 pip)
+uv venv
+uv pip install -r requirements.txt
+
+# 没装 uv 的话:  winget install --id=astral-sh.uv  或  pipx install uv
+# 也可以走 stdlib 方案: python -m venv .venv ; .\.venv\Scripts\pip install -r requirements.txt
 ```
 
-需要先装好 IC Markets MT5 客户端并登录 demo 账户。
+需要先装好 IC Markets MT5 客户端并登录 demo 账户。Demo MT5 路径由 `quant.config.get_demo_mt5_path()` 自动解析（已知机器路径见 `quant/config.py`）。
 
 ## 用法
 
-```bash
-python scripts/mt5_connect.py
+```powershell
+.\.venv\Scripts\python.exe scripts/mt5_connect.py
+# 或者先 .\.venv\Scripts\activate, 然后 python scripts/mt5_connect.py
 ```
 
 输出：账户连接状态、XAUUSD specification、最新 tick、最近 30 天 M1 K 线（存到 `data/`）、成本模型估算。

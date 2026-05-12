@@ -58,10 +58,10 @@ from mt5_connect import SYMBOL, init_mt5  # noqa: E402
 import MetaTrader5 as mt5  # noqa: E402
 import pyarrow.parquet as pq  # noqa: E402
 
+from quant.config import get_demo_mt5_path  # noqa: E402
 from quant.data.broker_time import BrokerClock, discover_clock  # noqa: E402
 from quant.data.parquet import tick_path, write_ticks  # noqa: E402
 
-TERMINAL_PATH = r"F:\demo-mt5\terminal64.exe"
 DATA_ROOT = REPO_ROOT / "data"
 ALERT_LOG = DATA_ROOT / "alerts.jsonl"
 
@@ -334,7 +334,7 @@ def main() -> int:
     args = parse_args()
     persist = not args.no_persist
 
-    if not init_mt5(terminal_path=TERMINAL_PATH):
+    if not init_mt5(terminal_path=get_demo_mt5_path()):
         return 1
 
     try:

@@ -29,11 +29,16 @@ except ImportError:
     print("[FATAL] 没装 MetaTrader5. 在 Windows Python 里跑: pip install MetaTrader5")
     sys.exit(1)
 
+# Make the `quant` package importable when this file is run as a script.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO_ROOT))
+
+from quant.config import get_demo_mt5_path  # noqa: E402
 
 SYMBOL = "XAUUSD"
 # Anchor at repo root (scripts/.. = project root) so CSVs land in <repo>/data
 # regardless of where the script is invoked from or what Path.home() resolves to.
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+DATA_DIR = _REPO_ROOT / "data"
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +244,7 @@ def main() -> int:
     LOGIN: int | None = None
     PASSWORD: str | None = None
     SERVER: str | None = None
-    TERMINAL_PATH: str | None = r"F:\demo-mt5\terminal64.exe"
+    TERMINAL_PATH: str | None = get_demo_mt5_path()
 
     # IC Markets Raw Trading Ltd (Seychelles) XAUUSD commission, verified from
     # MT5 Specification 2026-05-10: $3.5/lot per side, charged in/out

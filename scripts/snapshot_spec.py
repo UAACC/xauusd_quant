@@ -31,10 +31,10 @@ from mt5_connect import SYMBOL, get_symbol_info, init_mt5  # noqa: E402
 
 import MetaTrader5 as mt5  # noqa: E402
 
+from quant.config import get_demo_mt5_path  # noqa: E402
 from quant.costs.spec import SymbolDailySnapshot, diff_snapshots, severity  # noqa: E402
 from quant.data.broker_time import discover_clock  # noqa: E402
 
-TERMINAL_PATH = r"F:\demo-mt5\terminal64.exe"
 COMMISSION_ROUNDTRIP_USD = 7.0  # IC Raw Trading Ltd XAUUSD, verified 2026-05-10
 FIXTURES_DIR = REPO_ROOT / "fixtures" / "spec"
 
@@ -54,7 +54,7 @@ def main() -> int:
     args = ap.parse_args()
     anonymize = not args.keep_identity if ANONYMIZE_DEFAULT else False
 
-    if not init_mt5(terminal_path=TERMINAL_PATH):
+    if not init_mt5(terminal_path=get_demo_mt5_path()):
         return 1
 
     try:

@@ -36,7 +36,9 @@ import time
 from pathlib import Path
 
 # Reuse connection / CostModel from mt5_connect.py in the same dir.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+_SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_SCRIPT_DIR))
+sys.path.insert(0, str(_SCRIPT_DIR.parent))  # repo root for `quant` package
 from mt5_connect import (  # noqa: E402  (path injection above)
     SYMBOL,
     build_cost_model,
@@ -46,13 +48,14 @@ from mt5_connect import (  # noqa: E402  (path injection above)
 
 import MetaTrader5 as mt5  # noqa: E402
 
+from quant.config import get_demo_mt5_path  # noqa: E402
+
 
 VOLUME = 0.01                 # 0.01 lot = 1 oz; smallest tradable size
 MAGIC = 20260510              # arbitrary identifier for this script's orders
 COMMENT = "stage0-slippage"
 DEVIATION_POINTS = 50         # max slippage tolerance before broker rejects (~$50/lot worst case)
 HOLD_SECONDS = 5
-TERMINAL_PATH = r"F:\demo-mt5\terminal64.exe"
 COMMISSION_ROUNDTRIP_USD = 7.0
 
 
@@ -120,7 +123,7 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    if not init_mt5(terminal_path=TERMINAL_PATH):
+    if not init_mt5(terminal_path=get_demo_mt5_path()):
         return 1
 
     try:

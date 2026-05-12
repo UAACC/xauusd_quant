@@ -116,12 +116,21 @@ requirements.txt # MetaTrader5, pandas, numpy, pyarrow
 
 **所有 parquet 写入存真 UTC**，schema metadata 标记 `time_convention=utc`。Legacy 文件（May 4-8 ticks 和早期 bars）仍是 broker-time-as-UTC 标错的状态，read 时由 `_read_existing_ticks_as_utc()` 自动转换。Task #16 待办：用 `--force` 重新拉一遍干净的 UTC 版本。
 
-### 5.2 Dual-MT5 隔离
+### 5.2 Dual-MT5 隔离 + 多机器路径解析
 用户有两个独立 MT5 安装：
 - **Live MT5**（用户自己 EA 跑的，**绝对不要碰**）— 路径不知，他自己用
-- **Demo MT5**：`F:\demo-mt5\terminal64.exe` — 我们所有代码绑这个
+- **Demo MT5** — 路径因机器而异，所有代码必须显式绑这个
 
-所有 Python 脚本必须 `mt5.initialize(path=r"F:\demo-mt5\terminal64.exe")`，不指定路径会随机绑（可能绑 live）。`mt5_connect.init_mt5()` 里有 `trade_mode == 2 (REAL) abort` 守卫，意外绑到 live 会 abort，**不要拆**。
+**多机器路径用 `quant.config.get_demo_mt5_path()` 解析**（don't hardcode）：
+1. 优先读 env var `XAUUSD_DEMO_MT5_PATH`
+2. 否则按 `_KNOWN_DEMO_MT5_PATHS` 顺序找第一个存在的：
+   - `F:\demo-mt5\terminal64.exe`（旧机器, repo 在 `E:\xauusd_quant`）
+   - `C:\Program Files\MetaTrader 5\terminal64.exe`（当前机器, repo 在 `W:\xauusd_quant`）
+3. 都不存在 → `FileNotFoundError`（loud-fail）
+
+加新机器：在 `quant/config.py` 的 `_KNOWN_DEMO_MT5_PATHS` 前面加路径，**不要删** 已有项（用户在两台机器之间切换）；或者直接在那台机器上设 env var。
+
+`mt5_connect.init_mt5()` 里有 `trade_mode == 2 (REAL) abort` 守卫做次级防御，意外绑到 live 会 abort，**不要拆**。
 
 ### 5.3 IC Markets XAUUSD 校准值（2026-05-10 verified）
 ```
@@ -305,11 +314,18 @@ Phase 5: walk-forward 跨更长样本 (拉 1-2 年 H4)
 git clone https://github.com/UAACC/xauusd_quant.git
 cd xauusd_quant
 
-# 2. 装依赖
-pip install -r requirements.txt
+# 2. 建虚拟环境 + 装依赖 (用 uv, 比 pip 快 ~10x)
+#   没装 uv: winget install --id=astral-sh.uv  或  pipx install uv
+uv venv
+uv pip install -r requirements.txt
+# 验证: .\.venv\Scripts\python.exe -c "import MetaTrader5, pandas, numpy, pyarrow"
+# 之后所有 python 命令前面要么用 .\.venv\Scripts\python.exe 完整路径,
+# 要么先 .\.venv\Scripts\activate (每个新 PowerShell 会话)
 
 # 3. 装 IC Markets MT5 demo 客户端
-# 用户当前 demo MT5 在: F:\demo-mt5\terminal64.exe
+# 已知路径见 quant.config._KNOWN_DEMO_MT5_PATHS:
+#   - F:\demo-mt5\terminal64.exe (旧机器)
+#   - C:\Program Files\MetaTrader 5\terminal64.exe (当前机器)
 # 如果新机器还没装, 跑这个 setup:
 #   https://download.mql5.com/cdn/web/ic.markets.pty.ltd/mt5/icmarkets5setup.exe
 # 装到独立路径 (不要覆盖任何已有 MT5)
@@ -319,8 +335,10 @@ pip install -r requirements.txt
 git config user.name "UAACC"
 git config user.email "61613205+UAACC@users.noreply.github.com"
 
-# 5. 改 mt5_connect.py / live_monitor.py / pull_*.py 里的 TERMINAL_PATH 常量
-# 改成新机器上 demo MT5 的实际路径
+# 5. 添加机器路径 (二选一):
+#   (a) 在 quant/config.py 的 _KNOWN_DEMO_MT5_PATHS 元组里加一行 (推荐, 跨机器自洽)
+#   (b) 设 env var: $env:XAUUSD_DEMO_MT5_PATH = "C:\path\to\terminal64.exe"
+# 验证: python -c "from quant.config import get_demo_mt5_path; print(get_demo_mt5_path())"
 
 # 6. 跑 smoke test 验证
 python scripts/snapshot_spec.py     # 应输出 [CLOCK] iana_tz=Europe/Athens, agreement=OK
@@ -330,12 +348,21 @@ python scripts/mt5_connect.py        # 拉 spec + tick + 30 天 M1
 #    见第 8 节
 ```
 
-## 11. 文件位置速查
+## 11. 文件位置速查 (按机器)
 ```
-项目根:        E:\xauusd_quant
-Memory:        C:\Users\Administrator\.claude\projects\E--xauusd-quant\memory\
-Demo MT5:      F:\demo-mt5\terminal64.exe
-凭据 (本地, 不入 repo): credentials  (放在 repo 根, 已被 .gitignore 排除)
+旧机器 (Administrator):
+  项目根:        E:\xauusd_quant
+  Memory:        C:\Users\Administrator\.claude\projects\E--xauusd-quant\memory\
+  Demo MT5:      F:\demo-mt5\terminal64.exe
+
+当前机器 (ldh19):
+  项目根:        W:\xauusd_quant
+  Memory:        C:\Users\ldh19\.claude\projects\W--xauusd-quant\memory\
+  Demo MT5:      C:\Program Files\MetaTrader 5\terminal64.exe
+
+通用:
+  Demo MT5 路径解析: quant.config.get_demo_mt5_path() (env var 或 _KNOWN_DEMO_MT5_PATHS)
+  凭据 (本地, 不入 repo): credentials  (放在 repo 根, 已被 .gitignore 排除)
 ```
 
 ## 12. 当前未推进的事项 (2026-05-11 19:04 UTC 快照)

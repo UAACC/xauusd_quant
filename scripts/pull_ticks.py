@@ -33,10 +33,10 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from mt5_connect import SYMBOL, init_mt5  # noqa: E402
 import MetaTrader5 as mt5  # noqa: E402
 
+from quant.config import get_demo_mt5_path  # noqa: E402
 from quant.data.broker_time import BrokerClock, discover_clock  # noqa: E402
 from quant.data.parquet import tick_path, write_ticks  # noqa: E402
 
-TERMINAL_PATH = r"F:\demo-mt5\terminal64.exe"
 DATA_ROOT = REPO_ROOT / "data"
 
 
@@ -103,7 +103,7 @@ def main() -> int:
         start_d = date.fromisoformat(args.start)
         end_d = date.fromisoformat(args.end) if args.end else start_d
 
-    if not init_mt5(terminal_path=TERMINAL_PATH):
+    if not init_mt5(terminal_path=get_demo_mt5_path()):
         return 1
 
     try:
