@@ -1,0 +1,35 @@
+{
+  "account_login": 0,
+  "ask_at_capture": 4725.02,
+  "bid_at_capture": 4724.9,
+  "broker_clock": {
+    "agrees": true,
+    "confidence": "high",
+    "expected_offset_seconds": 10800,
+    "iana_tz": "Europe/Athens",
+    "measured_at_utc": "2026-05-12T04:24:34.411281+00:00",
+    "measured_offset_hours": 2.999722222222222,
+    "measured_offset_seconds": 10799,
+    "source": "live_tick"
+  },
+  "captured_at_utc": "2026-05-12T04:24:34.423711+00:00",
+  "commission_roundtrip_usd": 7.0,
+  "margin_initial": 100.0,
+  "server": "ICMarketsSC-Demo",
+  "spread_points_at_capture": 12,
+  "static": {
+    "contract_size": 100.0,
+    "digits": 2,
+    "margin_currency": "XAU",
+    "point": 0.01,
+    "profit_currency": "USD",
+    "swap_3day_index": 3,
+    "swap_mode": 1,
+    "symbol": "XAUUSD",
+    "tick_size": 0.01,
+    "tick_value": 1.0
+  },
+  "stops_level": 0,
+  "swap_long": -55.085,
+  "swap_short": 46.595
+}
