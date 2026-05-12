@@ -59,14 +59,21 @@ def detect_bos_reversal_signals(
     volume_lookback: int = 20,
     volume_multiplier: float = 1.4,
     m15_bos_sustain: int = 2,
+    max_h4_bars_capitulation_to_bos: int = 12,
     max_h4_bars_to_retest: int = 2,
     retest_max_distance_pct: float = 0.5,
     m15_hold_bars: int = 2,
 ) -> list[BosReversalSignal]:
     """Scan H4 + M15 bars; return all A-grade long BOS-reversal signals.
 
-    Signals are returned in chronological order of ``entry_time``. Each
-    capitulation-low candidate produces at most one signal.
+    Signals are returned in chronological order of ``entry_time`` and
+    de-duplicated on ``(entry_time, entry_price)`` — when distinct
+    capitulation candidates resolve to the same M15 entry bar, only one
+    signal is kept (the one with the most-recent capitulation, which
+    carries the freshest context). The friend's reference May 6 setup
+    has ~9 H4 bars between capitulation and BOS, so the default
+    ``max_h4_bars_capitulation_to_bos=12`` keeps it while killing the
+    "stale" cases where price drifts back to a long-ago capitulation level.
 
     Stages (long setup):
 
@@ -75,7 +82,8 @@ def detect_bos_reversal_signals(
     2. Capit. : H4 swing low whose volume ≥ ``volume_multiplier`` × median
                 of the prior ``volume_lookback`` H4 bars.
     3. BOS    : first H4 close above the most recent prior LH after the
-                capitulation; then M15 sustains ``m15_bos_sustain``
+                capitulation, within ``max_h4_bars_capitulation_to_bos`` of
+                the capitulation; then M15 sustains ``m15_bos_sustain``
                 consecutive closes above the same level.
     4. Wait   : retest must occur within ``max_h4_bars_to_retest`` H4 bars
                 of the H4 BOS; otherwise abandon. Also abandon if H4 closes
@@ -125,6 +133,14 @@ def detect_bos_reversal_signals(
         if bos_idx is None:
             continue
         bos_time = h4_bars.iloc[bos_idx]["time"]
+
+        # Stage 3a: capitulation-to-BOS staleness cap. Without this, a
+        # capitulation from weeks ago can re-fire as soon as price drifts
+        # back through its prior LH, even when the original capitulation's
+        # context (failed-breakdown, volume surge) is no longer relevant.
+        capit_to_bos_h4_bars = (bos_time - swing.time) / pd.Timedelta(hours=4)
+        if capit_to_bos_h4_bars > max_h4_bars_capitulation_to_bos:
+            continue
 
         # Stage 3b: M15 sustain — N consecutive closes above LH from the H4 BOS bar onward
         # Subtract 1 second to make 'after' inclusive of bars at bos_time.
@@ -183,8 +199,15 @@ def detect_bos_reversal_signals(
             capitulation_time=pd.Timestamp(swing.time),
         ))
 
-    # Sort by entry time (signals from later capitulations may complete earlier
-    # in some pathological orderings; chronological order is more useful
-    # downstream).
-    signals.sort(key=lambda s: s.entry_time)
-    return signals
+    # De-duplicate on (entry_time, entry_price). When two capitulations
+    # produce the same M15 entry bar (different histories converging on the
+    # same BOS+retest+hold sequence), keep only one — they're the same
+    # trade. Prefer the most recent capitulation (freshest context).
+    signals.sort(key=lambda s: (s.entry_time, -s.capitulation_time.value))
+    deduped: dict[tuple[pd.Timestamp, float], BosReversalSignal] = {}
+    for s in signals:
+        key = (s.entry_time, s.entry_price)
+        if key not in deduped:
+            deduped[key] = s
+    out = sorted(deduped.values(), key=lambda s: s.entry_time)
+    return out

@@ -109,3 +109,39 @@ def test_signal_killed_by_too_strict_trend(smc_h4_apr_may, m15_apr_may):
 def test_empty_inputs_return_empty():
     empty = pd.DataFrame(columns=["time", "open", "high", "low", "close", "tick_volume"])
     assert detect_bos_reversal_signals(empty, empty) == []
+
+
+# ---------------------------------------------------------------------------
+# Dedup + capitulation expiration (Phase 1 follow-up fixes)
+# ---------------------------------------------------------------------------
+
+def test_apr_may_dedup_no_duplicate_entries(smc_h4_apr_may, m15_apr_may):
+    """No two signals should share the same (entry_time, entry_price).
+    Pre-fix the May 7 07:30 / 4743.00 entry was emitted twice (one from
+    Apr 27 capitulation, one from Apr 28); dedup must keep only one."""
+    signals = detect_bos_reversal_signals(smc_h4_apr_may, m15_apr_may)
+    keys = [(s.entry_time, s.entry_price) for s in signals]
+    assert len(keys) == len(set(keys)), f"duplicate signals found: {keys}"
+
+
+def test_apr_may_capitulation_expiration_kills_stale_setups(smc_h4_apr_may, m15_apr_may):
+    """With max_h4_bars_capitulation_to_bos=3, the May 7 setups (capitulation
+    in late April, BOS 9+ days later) are killed; the May 6 setup
+    (capitulation -> BOS = ~9 H4 bars) is also killed under this strict cap."""
+    strict = detect_bos_reversal_signals(
+        smc_h4_apr_may, m15_apr_may, max_h4_bars_capitulation_to_bos=3,
+    )
+    permissive = detect_bos_reversal_signals(
+        smc_h4_apr_may, m15_apr_may, max_h4_bars_capitulation_to_bos=100,
+    )
+    # Strict cap removes more signals than permissive
+    assert len(strict) < len(permissive)
+
+
+def test_apr_may_default_cap_keeps_friend_may6_setup(smc_h4_apr_may, m15_apr_may):
+    """Default cap (12 H4 bars) must KEEP the friend's reference May 6 setup,
+    whose capitulation -> BOS gap is ~9 H4 bars."""
+    signals = detect_bos_reversal_signals(smc_h4_apr_may, m15_apr_may)
+    may4_capit = pd.Timestamp("2026-05-04 13:00:00", tz="UTC")
+    matches = [s for s in signals if s.capitulation_time == may4_capit]
+    assert len(matches) == 1, "default cap should keep the friend's May 6 setup"
