@@ -87,6 +87,8 @@ class BacktestReport:
     final_balance: float
     ideal_rr: float           # tp_distance / sl_distance per signal — should equal 2 for default config
     realised_rr: float        # avg-winner / abs(avg-loser); accounts for BE exits and intrabar slippage
+    sharpe_annual: float      # annualised Sharpe of per-trade net P&L stream
+    trades_per_year: float    # observed trade frequency
 
     def summary(self) -> str:
         lines = [
@@ -102,6 +104,8 @@ class BacktestReport:
             f"  avg trade net      : ${self.avg_trade_net:>+10.2f}",
             f"  max drawdown       : ${self.max_drawdown:>+12.2f}",
             f"  R:R ideal/realised : {self.ideal_rr:.2f} / {self.realised_rr:.2f}",
+            f"  Sharpe (annual)    : {self.sharpe_annual:>+5.2f}  (n={self.n_trades_closed}, "
+            f"freq={self.trades_per_year:.1f}/yr)",
             f"  balance start->end : ${self.initial_balance:,.2f} -> ${self.final_balance:,.2f}",
         ]
         return "\n".join(lines)
@@ -169,8 +173,17 @@ def run_event_backtest(
     cost_per_roundtrip_usd_per_lot: float = 12.0,
     be_trigger_distance: float = 15.0,
     min_lot_step: float = 0.01,
+    fixed_lots: float | None = None,
 ) -> BacktestReport:
-    """Run all signals through the trade-lifecycle simulator; aggregate stats."""
+    """Run all signals through the trade-lifecycle simulator; aggregate stats.
+
+    Sizing mode:
+      - default (``fixed_lots=None``): risk-based — each trade sized so an
+        SL hit costs ``risk_pct`` of the running balance. Balance compounds.
+      - ``fixed_lots=X``: every trade uses exactly ``X`` lots regardless of
+        balance. Use for measuring the strategy's raw per-trade edge without
+        compounding. Balance still tracked (can go negative for analysis).
+    """
     trades: list[Trade] = []
     balance = initial_balance
     n_open = 0
@@ -180,11 +193,14 @@ def run_event_backtest(
     for sig in signals:
         sl_distance_price = sig.entry_price - sig.sl_price if sig.direction == "long" \
             else sig.sl_price - sig.entry_price
-        lots = lots_for_risk(
-            account_balance=balance, risk_pct=risk_pct,
-            sl_distance_price=sl_distance_price, contract_size=contract_size,
-            min_lot_step=min_lot_step,
-        )
+        if fixed_lots is not None:
+            lots = fixed_lots
+        else:
+            lots = lots_for_risk(
+                account_balance=balance, risk_pct=risk_pct,
+                sl_distance_price=sl_distance_price, contract_size=contract_size,
+                min_lot_step=min_lot_step,
+            )
         if lots == 0:
             n_skipped += 1
             continue
@@ -259,6 +275,24 @@ def run_event_backtest(
     else:
         realised_rr = 0.0
 
+    # Annualised Sharpe of trade-level net P&L stream.
+    # We use trade frequency (trades/year) as the annualisation factor's
+    # square-root — i.e. a strategy's per-trade Sharpe scales by sqrt(N/yr)
+    # when extrapolated to annual returns.
+    if n_closed >= 2:
+        import statistics
+        pnls = [t.net_pnl for t in trades]
+        mean_pnl = statistics.mean(pnls)
+        std_pnl = statistics.stdev(pnls)  # sample std (n-1)
+        per_trade_sharpe = mean_pnl / std_pnl if std_pnl > 0 else 0.0
+        days_span = (trades[-1].exit_time - trades[0].entry_time).total_seconds() / 86400
+        years_span = max(days_span / 365.25, 1e-9)
+        trades_per_year = n_closed / years_span
+        sharpe_annual = per_trade_sharpe * (trades_per_year ** 0.5)
+    else:
+        sharpe_annual = 0.0
+        trades_per_year = 0.0
+
     return BacktestReport(
         trades=trades,
         n_signals_evaluated=len(signals),
@@ -270,4 +304,5 @@ def run_event_backtest(
         win_rate=win_rate, avg_trade_net=avg_net, max_drawdown=max_dd,
         initial_balance=initial_balance, final_balance=balance,
         ideal_rr=ideal_rr, realised_rr=realised_rr,
+        sharpe_annual=sharpe_annual, trades_per_year=trades_per_year,
     )
