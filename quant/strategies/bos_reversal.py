@@ -59,6 +59,7 @@ def detect_bos_reversal_signals(
     volume_lookback: int = 20,
     volume_multiplier: float = 1.4,
     m15_bos_sustain: int = 2,
+    min_h4_bars_capitulation_to_bos: int = 3,
     max_h4_bars_capitulation_to_bos: int = 12,
     max_h4_bars_to_retest: int = 2,
     retest_max_distance_pct: float = 0.5,
@@ -82,9 +83,12 @@ def detect_bos_reversal_signals(
     2. Capit. : H4 swing low whose volume ≥ ``volume_multiplier`` × median
                 of the prior ``volume_lookback`` H4 bars.
     3. BOS    : first H4 close above the most recent prior LH after the
-                capitulation, within ``max_h4_bars_capitulation_to_bos`` of
-                the capitulation; then M15 sustains ``m15_bos_sustain``
-                consecutive closes above the same level.
+                capitulation, with the gap (in H4 bars) within
+                ``[min_h4_bars_capitulation_to_bos, max_h4_bars_capitulation_to_bos]``;
+                then M15 sustains ``m15_bos_sustain`` consecutive closes
+                above the same level. The min-gap filter rejects oversold-
+                bounce false positives (BOS within a few hours of capitulation
+                is the market overshooting, not a structural reversal).
     4. Wait   : retest must occur within ``max_h4_bars_to_retest`` H4 bars
                 of the H4 BOS; otherwise abandon. Also abandon if H4 closes
                 back below the LH or below the prior swing low before the
@@ -134,12 +138,20 @@ def detect_bos_reversal_signals(
             continue
         bos_time = h4_bars.iloc[bos_idx]["time"]
 
-        # Stage 3a: capitulation-to-BOS staleness cap. Without this, a
-        # capitulation from weeks ago can re-fire as soon as price drifts
-        # back through its prior LH, even when the original capitulation's
-        # context (failed-breakdown, volume surge) is no longer relevant.
+        # Stage 3a: capitulation-to-BOS gap bounds.
+        # Upper bound: without this, a capitulation from weeks ago can re-fire
+        # as soon as price drifts back through its prior LH, even when the
+        # original capitulation's context (volume surge, failed breakdown) is
+        # no longer relevant.
+        # Lower bound: a BOS firing within a bar or two of capitulation is an
+        # oversold bounce, not a real reversal — friend explicitly rejects
+        # these ("前面爆量暴跌不会立刻反转"). Default 3 H4 bars (~12h) gives
+        # the market time to digest the capitulation before treating the
+        # break as structurally meaningful. May 6 reference (~9-10 bars on
+        # IC feed) is comfortably above this floor.
         capit_to_bos_h4_bars = (bos_time - swing.time) / pd.Timedelta(hours=4)
-        if capit_to_bos_h4_bars > max_h4_bars_capitulation_to_bos:
+        if not (min_h4_bars_capitulation_to_bos <= capit_to_bos_h4_bars
+                <= max_h4_bars_capitulation_to_bos):
             continue
 
         # Stage 3b: M15 sustain — N consecutive closes above LH from the H4 BOS bar onward

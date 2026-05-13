@@ -145,3 +145,49 @@ def test_apr_may_default_cap_keeps_friend_may6_setup(smc_h4_apr_may, m15_apr_may
     may4_capit = pd.Timestamp("2026-05-04 13:00:00", tz="UTC")
     matches = [s for s in signals if s.capitulation_time == may4_capit]
     assert len(matches) == 1, "default cap should keep the friend's May 6 setup"
+
+
+# ---------------------------------------------------------------------------
+# Min capitulation-to-BOS gap (friend追问 #2 follow-up)
+# Friend's rejected #2 had capitulation -> BOS = 1 H4 bar (4h), which they
+# called "oversold bounce, not a real reversal". The default min=3 should
+# filter such cases while keeping the May 6 setup (9-bar gap) intact.
+# ---------------------------------------------------------------------------
+
+def test_apr_may_default_min_keeps_friend_may6_setup(smc_h4_apr_may, m15_apr_may):
+    """Default min (3 H4 bars) must KEEP the May 6 reference setup
+    (capitulation -> BOS = 9 H4 bars, comfortably above floor)."""
+    signals = detect_bos_reversal_signals(smc_h4_apr_may, m15_apr_may)
+    may4_capit = pd.Timestamp("2026-05-04 13:00:00", tz="UTC")
+    matches = [s for s in signals if s.capitulation_time == may4_capit]
+    assert len(matches) == 1, "default min should keep the friend's May 6 setup"
+
+
+def test_apr_may_min_gap_filter_is_strictly_monotonic(smc_h4_apr_may, m15_apr_may):
+    """Raising min_h4_bars_capitulation_to_bos never INCREASES signal count."""
+    counts = []
+    for m in (0, 3, 6, 9, 12):
+        sigs = detect_bos_reversal_signals(
+            smc_h4_apr_may, m15_apr_may,
+            min_h4_bars_capitulation_to_bos=m,
+        )
+        counts.append((m, len(sigs)))
+    # monotonically non-increasing
+    for (m_a, n_a), (m_b, n_b) in zip(counts, counts[1:]):
+        assert n_a >= n_b, f"min={m_a}->{n_a} but min={m_b}->{n_b} should be <= {n_a}"
+
+
+def test_apr_may_min_gap_above_may6_kills_it(smc_h4_apr_may, m15_apr_may):
+    """A min above the May 6 setup's actual gap must kill it.
+
+    Note: capitulation->BOS gap is ~9-10 H4 bars (varies with broker feed:
+    a one-bar wick difference around the May 6 BOS bar shifts the gap by 1).
+    Use min=11 as the unambiguous-too-strict bound so the test is feed-
+    robust."""
+    signals = detect_bos_reversal_signals(
+        smc_h4_apr_may, m15_apr_may,
+        min_h4_bars_capitulation_to_bos=11,
+    )
+    may4_capit = pd.Timestamp("2026-05-04 13:00:00", tz="UTC")
+    matches = [s for s in signals if s.capitulation_time == may4_capit]
+    assert len(matches) == 0, "min=11 should reject May 6 setup (~9-10-bar gap)"
