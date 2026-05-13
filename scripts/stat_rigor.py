@@ -115,6 +115,11 @@ def permutation_pvalue(pnls: np.ndarray, trades_per_year: float, n: int = N_PERM
 
 
 def main() -> int:
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--min-adx", type=float, default=None)
+    args = ap.parse_args()
+
     start = (2022, 3)
     end = (2026, 5)
 
@@ -139,6 +144,7 @@ def main() -> int:
         signals = detect_bos_reversal_signals(
             h4, m15, h1_bars=h1,
             sl_distance=sl_dist, tp_distance=tp_dist,
+            min_adx_at_bos=args.min_adx,
         )
         report = run_event_backtest(
             signals, m15,

@@ -23,6 +23,7 @@ from typing import Literal
 
 import pandas as pd
 
+from quant.structure.adx import adx_at
 from quant.structure.atr import atr_at
 from quant.structure.bos import (
     first_close_above,
@@ -75,6 +76,8 @@ def detect_bos_reversal_signals(
     d1_bars: pd.DataFrame | None = None,
     require_d1_aligned: bool = False,
     d1_ema_period: int = 50,
+    min_adx_at_bos: float | None = None,
+    adx_period: int = 14,
 ) -> list[BosReversalSignal]:
     """Scan H4 + M15 bars; return all A-grade long BOS-reversal signals.
 
@@ -254,6 +257,17 @@ def detect_bos_reversal_signals(
         )
         if hold_idx is None:
             continue
+
+        # Stage 5b: ADX trend-strength gate.
+        # ADX measures how STRONG the trend is (direction-agnostic). A
+        # reversal of a weak/choppy trend is mostly noise; a reversal of a
+        # strong trend has more theoretical justification. Filter signals
+        # whose H4 ADX at BOS is below ``min_adx_at_bos`` (e.g., 25 for
+        # "real trend" threshold per Wilder's original guidance).
+        if min_adx_at_bos is not None:
+            current_adx = adx_at(h4_bars, t=bos_time, period=adx_period)
+            if current_adx is None or current_adx < min_adx_at_bos:
+                continue
 
         # Stage 5c: D1 trend alignment filter.
         # For LONG (down-trend reversal) setups, reject if D1 is clearly
