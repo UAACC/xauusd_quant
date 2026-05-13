@@ -23,6 +23,7 @@ from typing import Literal
 
 import pandas as pd
 
+from quant.structure.atr import atr_at
 from quant.structure.bos import (
     first_close_above,
     first_close_below,
@@ -67,6 +68,10 @@ def detect_bos_reversal_signals(
     m15_hold_bars: int = 2,
     require_micro_choch: bool = True,
     micro_choch_timeframe_fractal_n: int = 2,
+    use_atr_stops: bool = False,
+    atr_period: int = 14,
+    atr_sl_mult: float = 1.5,
+    atr_tp_mult: float = 3.0,
 ) -> list[BosReversalSignal]:
     """Scan H4 + M15 bars; return all A-grade long BOS-reversal signals.
 
@@ -245,12 +250,26 @@ def detect_bos_reversal_signals(
         # Stage 6: emit signal at the close of the hold-completing M15 bar
         entry_bar = m15_bars.iloc[hold_idx]
         entry_price = float(entry_bar["close"])
+
+        # SL/TP: ATR-scaled (per-trade vol adaptation) OR fixed dollar distance.
+        # ATR computed on H4 (the trend-confirmation timeframe) using bars
+        # strictly prior to the BOS bar — no look-ahead.
+        if use_atr_stops:
+            entry_atr = atr_at(h4_bars, t=bos_time, period=atr_period)
+            if entry_atr is None or entry_atr <= 0:
+                continue  # not enough warmup; skip silently
+            sl_dist = atr_sl_mult * entry_atr
+            tp_dist = atr_tp_mult * entry_atr
+        else:
+            sl_dist = sl_distance
+            tp_dist = tp_distance
+
         signals.append(BosReversalSignal(
             direction="long",
             entry_time=pd.Timestamp(entry_bar["time"]),
             entry_price=entry_price,
-            sl_price=entry_price - sl_distance,
-            tp_price=entry_price + tp_distance,
+            sl_price=entry_price - sl_dist,
+            tp_price=entry_price + tp_dist,
             bos_level=float(prior_lh.price),
             bos_time=pd.Timestamp(bos_time),
             capitulation_time=pd.Timestamp(swing.time),

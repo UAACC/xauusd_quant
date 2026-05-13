@@ -141,6 +141,11 @@ def main() -> int:
                     help="price move before SL moves to breakeven (XAUUSD 15, USTEC ~94 = 75%% of SL)")
     ap.add_argument("--cost-rt", type=float, default=12.0,
                     help="round-trip cost USD per lot (XAUUSD 12, USTEC ~0.1)")
+    ap.add_argument("--use-atr-stops", action="store_true",
+                    help="ATR-scale SL/TP instead of fixed dollar distance")
+    ap.add_argument("--atr-sl-mult", type=float, default=1.5)
+    ap.add_argument("--atr-tp-mult", type=float, default=3.0)
+    ap.add_argument("--atr-period", type=int, default=14)
     args = ap.parse_args()
 
     print(f"loading {args.symbol} H4 + H1 + M15 bars: 2022-03 -> 2026-05 (50 months)")
@@ -149,12 +154,21 @@ def main() -> int:
     m15 = _load_months(args.symbol, "M15", (2022, 3), (2026, 5))
     print(f"  H4  : {len(h4):,}   H1 : {len(h1):,}   M15 : {len(m15):,}")
 
-    print(f"\nstrategy params: SL=${args.sl_distance:.2f}  TP=${args.tp_distance:.2f}  "
-          f"contract_size={args.contract_size}  be_trigger=${args.be_trigger:.2f}  "
-          f"cost_rt=${args.cost_rt:.2f}/lot")
+    if args.use_atr_stops:
+        print(f"\nstrategy params: ATR-scaled (period={args.atr_period}, "
+              f"SL×{args.atr_sl_mult:g}, TP×{args.atr_tp_mult:g})  "
+              f"contract_size={args.contract_size}  be_trigger=${args.be_trigger:.2f}  "
+              f"cost_rt=${args.cost_rt:.2f}/lot")
+    else:
+        print(f"\nstrategy params: SL=${args.sl_distance:.2f}  TP=${args.tp_distance:.2f}  "
+              f"contract_size={args.contract_size}  be_trigger=${args.be_trigger:.2f}  "
+              f"cost_rt=${args.cost_rt:.2f}/lot")
     signals = detect_bos_reversal_signals(
         h4, m15, h1_bars=h1,
         sl_distance=args.sl_distance, tp_distance=args.tp_distance,
+        use_atr_stops=args.use_atr_stops,
+        atr_sl_mult=args.atr_sl_mult, atr_tp_mult=args.atr_tp_mult,
+        atr_period=args.atr_period,
     )
     print(f"  {len(signals)} A-grade signals")
 
