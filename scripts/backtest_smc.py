@@ -28,22 +28,22 @@ from quant.strategies.bos_reversal import detect_bos_reversal_signals
 
 
 DATA_ROOT = REPO_ROOT / "data"
-SYMBOL = "XAUUSD"
+DEFAULT_SYMBOL = "XAUUSD"
 
 
-def _load_months(timeframe: str, start: tuple[int, int], end: tuple[int, int]) -> pd.DataFrame:
+def _load_months(symbol: str, timeframe: str, start: tuple[int, int], end: tuple[int, int]) -> pd.DataFrame:
     """Load + concat parquet bars across an inclusive month range."""
     frames: list[pd.DataFrame] = []
     y, m = start
     while (y, m) <= end:
-        path = DATA_ROOT / "bars" / SYMBOL / timeframe / f"{y:04d}" / f"{y:04d}-{m:02d}.parquet"
+        path = DATA_ROOT / "bars" / symbol / timeframe / f"{y:04d}" / f"{y:04d}-{m:02d}.parquet"
         if path.exists():
-            frames.append(read_bars_month(DATA_ROOT, SYMBOL, timeframe, y, m))
+            frames.append(read_bars_month(DATA_ROOT, symbol, timeframe, y, m))
         m += 1
         if m > 12:
             m, y = 1, y + 1
     if not frames:
-        raise FileNotFoundError(f"no {timeframe} bars in range {start}..{end}; pull with scripts/pull_bars.py")
+        raise FileNotFoundError(f"no {symbol} {timeframe} bars in range {start}..{end}; pull with scripts/pull_bars.py --symbol {symbol}")
     return pd.concat(frames, ignore_index=True).sort_values("time").reset_index(drop=True)
 
 
@@ -72,6 +72,8 @@ def _format_trade_ledger(trades: list) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--symbol", default=DEFAULT_SYMBOL,
+                    help=f"symbol to load + backtest (default: {DEFAULT_SYMBOL})")
     ap.add_argument("--start", type=_parse_month, default=(2026, 4),
                     help="start month YYYY-MM (inclusive)")
     ap.add_argument("--end", type=_parse_month, default=(2026, 5),
@@ -81,22 +83,29 @@ def main() -> int:
                     help="fraction of account risked per trade (0..1)")
     ap.add_argument("--cost-rt", type=float, default=12.0,
                     help="round-trip cost per lot in USD (spread + commission)")
+    ap.add_argument("--sl-distance", type=float, default=20.0,
+                    help="stop-loss distance in price units (default XAUUSD 20)")
+    ap.add_argument("--tp-distance", type=float, default=40.0,
+                    help="take-profit distance in price units (default XAUUSD 40)")
     ap.add_argument("--be-trigger", type=float, default=15.0,
                     help="USD profit before SL is moved to breakeven")
     ap.add_argument("--no-ledger", action="store_true",
                     help="suppress per-trade ledger output")
     args = ap.parse_args()
 
-    print(f"loading H4 + H1 + M15 bars: {args.start} -> {args.end}")
-    h4 = _load_months("H4", args.start, args.end)
-    h1 = _load_months("H1", args.start, args.end)
-    m15 = _load_months("M15", args.start, args.end)
+    print(f"loading {args.symbol} H4 + H1 + M15 bars: {args.start} -> {args.end}")
+    h4 = _load_months(args.symbol, "H4", args.start, args.end)
+    h1 = _load_months(args.symbol, "H1", args.start, args.end)
+    m15 = _load_months(args.symbol, "M15", args.start, args.end)
     print(f"  H4 bars  : {len(h4):>6,}  range {h4['time'].min()} -> {h4['time'].max()}")
     print(f"  H1 bars  : {len(h1):>6,}  range {h1['time'].min()} -> {h1['time'].max()}")
     print(f"  M15 bars : {len(m15):>6,}  range {m15['time'].min()} -> {m15['time'].max()}")
 
-    print("\ndetecting SMC BOS-reversal signals...")
-    signals = detect_bos_reversal_signals(h4, m15, h1_bars=h1)
+    print(f"\ndetecting SMC BOS-reversal signals (SL=${args.sl_distance:.2f}, TP=${args.tp_distance:.2f})...")
+    signals = detect_bos_reversal_signals(
+        h4, m15, h1_bars=h1,
+        sl_distance=args.sl_distance, tp_distance=args.tp_distance,
+    )
     print(f"  signals : {len(signals)}")
     for s in signals:
         rr_target = (s.tp_price - s.entry_price) / (s.entry_price - s.sl_price)

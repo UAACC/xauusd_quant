@@ -46,7 +46,7 @@ from quant.data.parquet import read_bars_month  # noqa: E402
 from quant.strategies.bos_reversal import detect_bos_reversal_signals  # noqa: E402
 
 DATA_ROOT = REPO_ROOT / "data"
-SYMBOL = "XAUUSD"
+DEFAULT_SYMBOL = "XAUUSD"
 
 
 def _parse_ym(s: str) -> tuple[int, int]:
@@ -65,13 +65,13 @@ def _ym_to_ts(ym: tuple[int, int]) -> pd.Timestamp:
     return pd.Timestamp(f"{ym[0]:04d}-{ym[1]:02d}-01", tz="UTC")
 
 
-def _load_months(timeframe: str, start_ym: tuple[int, int], end_ym: tuple[int, int]) -> pd.DataFrame:
+def _load_months(symbol: str, timeframe: str, start_ym: tuple[int, int], end_ym: tuple[int, int]) -> pd.DataFrame:
     frames = []
     cur = start_ym
     while cur <= end_ym:
-        path = DATA_ROOT / "bars" / SYMBOL / timeframe / f"{cur[0]:04d}" / f"{cur[0]:04d}-{cur[1]:02d}.parquet"
+        path = DATA_ROOT / "bars" / symbol / timeframe / f"{cur[0]:04d}" / f"{cur[0]:04d}-{cur[1]:02d}.parquet"
         if path.exists():
-            frames.append(read_bars_month(DATA_ROOT, SYMBOL, timeframe, cur[0], cur[1]))
+            frames.append(read_bars_month(DATA_ROOT, symbol, timeframe, cur[0], cur[1]))
         cur = _add_months(cur, 1)
     if not frames:
         return pd.DataFrame()
@@ -101,17 +101,23 @@ def _slice(df: pd.DataFrame, start_ym: tuple[int, int], end_ym: tuple[int, int])
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--symbol", default=DEFAULT_SYMBOL)
     ap.add_argument("--window", type=int, default=6,
                     help="Window size in months (default 6)")
-    ap.add_argument("--start", default="2022-03",
-                    help="First window starts at this year-month (YYYY-MM)")
-    ap.add_argument("--end", default="2026-05",
-                    help="Windows must fit before this year-month exclusive")
+    ap.add_argument("--start", default="2022-03")
+    ap.add_argument("--end", default="2026-05")
     ap.add_argument("--initial-balance", type=float, default=10_000.0)
-    ap.add_argument("--fixed-lots", type=float, default=0.01,
-                    help="Fixed lot size per trade (use None to switch to risk-based)")
-    ap.add_argument("--risk-based", action="store_true",
-                    help="Use risk-based sizing instead of fixed lots")
+    ap.add_argument("--fixed-lots", type=float, default=0.01)
+    ap.add_argument("--risk-based", action="store_true")
+    ap.add_argument("--sl-distance", type=float, default=20.0,
+                    help="SL price distance (XAUUSD 20, USTEC 125)")
+    ap.add_argument("--tp-distance", type=float, default=40.0,
+                    help="TP price distance (XAUUSD 40, USTEC 250)")
+    ap.add_argument("--contract-size", type=float, default=100.0,
+                    help="contract size (XAUUSD 100, USTEC 1)")
+    ap.add_argument("--be-trigger", type=float, default=15.0,
+                    help="BE trigger price move (XAUUSD 15, USTEC ~94)")
+    ap.add_argument("--cost-rt", type=float, default=12.0)
     return ap.parse_args()
 
 
@@ -120,10 +126,10 @@ def main() -> int:
     start_ym = _parse_ym(args.start)
     end_ym = _parse_ym(args.end)
 
-    print(f"loading H4 + H1 + M15 bars: {args.start} -> {args.end}")
-    h4 = _load_months("H4", start_ym, end_ym)
-    h1 = _load_months("H1", start_ym, end_ym)
-    m15 = _load_months("M15", start_ym, end_ym)
+    print(f"loading {args.symbol} H4 + H1 + M15 bars: {args.start} -> {args.end}")
+    h4 = _load_months(args.symbol, "H4", start_ym, end_ym)
+    h1 = _load_months(args.symbol, "H1", start_ym, end_ym)
+    m15 = _load_months(args.symbol, "M15", start_ym, end_ym)
     print(f"  H4 {len(h4):,}   H1 {len(h1):,}   M15 {len(m15):,}")
 
     wins = _windows(start_ym, end_ym, args.window)
@@ -149,7 +155,10 @@ def main() -> int:
         if h4_w.empty or h1_w.empty or m15_w.empty:
             print(f"{label:<22}  (no data)")
             continue
-        signals = detect_bos_reversal_signals(h4_w, m15_w, h1_bars=h1_w)
+        signals = detect_bos_reversal_signals(
+            h4_w, m15_w, h1_bars=h1_w,
+            sl_distance=args.sl_distance, tp_distance=args.tp_distance,
+        )
         if not signals:
             print(f"{label:<22}{0:>4}{0:>4}{0:>4}{0:>4}{'-':>7}{0.0:>+12.2f}{0.0:>+12.2f}{0.0:>+9.2f}{0.0:>+10.2f}")
             per_window.append({"label": label, "n": 0, "net": 0.0, "sharpe": 0.0, "max_dd": 0.0})
@@ -158,6 +167,9 @@ def main() -> int:
             signals, m15_w,
             initial_balance=args.initial_balance,
             fixed_lots=fixed_lots,
+            contract_size=args.contract_size,
+            be_trigger_distance=args.be_trigger,
+            cost_per_roundtrip_usd_per_lot=args.cost_rt,
         )
         print(
             f"{label:<22}{report.n_trades_closed:>4}{report.n_tp:>4}{report.n_sl:>4}{report.n_be:>4}"

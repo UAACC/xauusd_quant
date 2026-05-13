@@ -69,15 +69,23 @@ class CostModel:
         return self.spread_cost_usd_per_lot() + self.commission_roundtrip_usd
 
     def _swap_to_usd_per_lot(self, raw_swap: float) -> float:
-        # SYMBOL_SWAP_MODE_POINTS=1: raw 值是 price points; 1 point on 1 lot
-        # 美金价值 = point * contract_size  (前提: 盈利货币 = USD).
-        # 其他 swap_mode (currency / interest / reopen) 之后碰到再实现.
-        if self.swap_mode != 1:
-            raise NotImplementedError(
-                f"swap_mode={self.swap_mode} not supported; only POINTS (1) handled. "
-                f"扩展时参考 MT5 SYMBOL_SWAP_MODE_* 枚举."
-            )
-        return raw_swap * self.point * self.contract_size
+        # Convert MT5 raw swap to USD per lot per night based on swap_mode.
+        # Reference: MQL5 SYMBOL_SWAP_MODE_* enum.
+        if self.swap_mode == 1:
+            # MODE_POINTS: raw 值是 price points; 1 point on 1 lot
+            # 美金价值 = point * contract_size  (前提: 盈利货币 = USD).
+            # XAUUSD case.
+            return raw_swap * self.point * self.contract_size
+        if self.swap_mode == 3:
+            # MODE_CURRENCY_MARGIN: raw 值已经是 margin currency per lot.
+            # For symbols whose margin_currency is USD this is already
+            # USD/lot/night. USTEC case.
+            return raw_swap
+        raise NotImplementedError(
+            f"swap_mode={self.swap_mode} not supported. Implemented: 1 (POINTS), "
+            f"3 (CURRENCY_MARGIN). Add the formula for the remaining MT5 "
+            f"SYMBOL_SWAP_MODE_* enum values when first encountered."
+        )
 
     def swap_long_usd_per_night(self) -> float:
         return self._swap_to_usd_per_lot(self.swap_long)

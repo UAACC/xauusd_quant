@@ -32,13 +32,13 @@ from quant.data.parquet import read_bars_month
 from quant.strategies.bos_reversal import detect_bos_reversal_signals
 
 
-def _load_months(timeframe: str, start: tuple[int, int], end: tuple[int, int]) -> pd.DataFrame:
+def _load_months(symbol: str, timeframe: str, start: tuple[int, int], end: tuple[int, int]) -> pd.DataFrame:
     frames = []
     y, m = start
     while (y, m) <= end:
-        path = REPO_ROOT / "data" / "bars" / "XAUUSD" / timeframe / f"{y:04d}" / f"{y:04d}-{m:02d}.parquet"
+        path = REPO_ROOT / "data" / "bars" / symbol / timeframe / f"{y:04d}" / f"{y:04d}-{m:02d}.parquet"
         if path.exists():
-            frames.append(read_bars_month(REPO_ROOT / "data", "XAUUSD", timeframe, y, m))
+            frames.append(read_bars_month(REPO_ROOT / "data", symbol, timeframe, y, m))
         m += 1
         if m > 12:
             m, y = 1, y + 1
@@ -128,32 +128,58 @@ def run_mode(label: str, signals, m15, **kwargs):
 
 
 def main() -> int:
-    print("loading H4 + H1 + M15 bars: 2022-03 -> 2026-05 (50 months)")
-    h4 = _load_months("H4", (2022, 3), (2026, 5))
-    h1 = _load_months("H1", (2022, 3), (2026, 5))
-    m15 = _load_months("M15", (2022, 3), (2026, 5))
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--symbol", default="XAUUSD")
+    ap.add_argument("--sl-distance", type=float, default=20.0,
+                    help="SL distance in price units (XAUUSD 20, USTEC ~125)")
+    ap.add_argument("--tp-distance", type=float, default=40.0,
+                    help="TP distance in price units (XAUUSD 40, USTEC ~250)")
+    ap.add_argument("--contract-size", type=float, default=100.0,
+                    help="$ PnL per 1 unit price move per lot (XAUUSD 100, USTEC 1)")
+    ap.add_argument("--be-trigger", type=float, default=15.0,
+                    help="price move before SL moves to breakeven (XAUUSD 15, USTEC ~94 = 75%% of SL)")
+    ap.add_argument("--cost-rt", type=float, default=12.0,
+                    help="round-trip cost USD per lot (XAUUSD 12, USTEC ~0.1)")
+    args = ap.parse_args()
+
+    print(f"loading {args.symbol} H4 + H1 + M15 bars: 2022-03 -> 2026-05 (50 months)")
+    h4 = _load_months(args.symbol, "H4", (2022, 3), (2026, 5))
+    h1 = _load_months(args.symbol, "H1", (2022, 3), (2026, 5))
+    m15 = _load_months(args.symbol, "M15", (2022, 3), (2026, 5))
     print(f"  H4  : {len(h4):,}   H1 : {len(h1):,}   M15 : {len(m15):,}")
 
-    print("\ndetecting signals...")
-    signals = detect_bos_reversal_signals(h4, m15, h1_bars=h1)
+    print(f"\nstrategy params: SL=${args.sl_distance:.2f}  TP=${args.tp_distance:.2f}  "
+          f"contract_size={args.contract_size}  be_trigger=${args.be_trigger:.2f}  "
+          f"cost_rt=${args.cost_rt:.2f}/lot")
+    signals = detect_bos_reversal_signals(
+        h4, m15, h1_bars=h1,
+        sl_distance=args.sl_distance, tp_distance=args.tp_distance,
+    )
     print(f"  {len(signals)} A-grade signals")
+
+    common = dict(
+        contract_size=args.contract_size,
+        be_trigger_distance=args.be_trigger,
+        cost_per_roundtrip_usd_per_lot=args.cost_rt,
+    )
 
     # Mode A: 20% risk, compounding
     run_mode(
         "MODE A — 20% risk-based, compounding (the original report)",
-        signals, m15, initial_balance=10_000.0, risk_pct=0.20,
+        signals, m15, initial_balance=10_000.0, risk_pct=0.20, **common,
     )
 
     # Mode B: fixed 0.01 lot, no compound effect
     run_mode(
         "MODE B — fixed 0.01 lot, no compound (raw strategy edge)",
-        signals, m15, initial_balance=10_000.0, fixed_lots=0.01,
+        signals, m15, initial_balance=10_000.0, fixed_lots=0.01, **common,
     )
 
     # Mode C: 2% risk, compounding (a more realistic sizing for validation)
     run_mode(
         "MODE C — 2% risk, compounding (conservative sizing for validation period)",
-        signals, m15, initial_balance=10_000.0, risk_pct=0.02,
+        signals, m15, initial_balance=10_000.0, risk_pct=0.02, **common,
     )
 
     return 0
