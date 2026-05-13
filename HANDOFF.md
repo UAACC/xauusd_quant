@@ -1,7 +1,7 @@
 # XAUUSD CFD 量化项目 — 交接文档
 
 > 把这份文档完整粘给新机器上的 Claude Code 当第一条消息，就能接上之前的进度。
-> 最后更新：**2026-05-12 (Tuesday Calgary 早, 接近 UTC 中午)** by 用户 + Claude Opus 4.7
+> 最后更新：**2026-05-13 (Wednesday Calgary 早 / UTC 中午)** by 用户 + Claude Opus 4.7
 
 ---
 
@@ -9,22 +9,40 @@
 
 - **阶段 0 完整闭环 ✅**：环境、连接、读路径、写路径、demo 实盘单全部跑通
 - **阶段 1 完整闭环 ✅**：数据基础设施 + broker timezone robustness + cost model 校准 + BB 教学 baseline
-- **阶段 2 SMC 策略 MVP ✅**：7 个 structure primitives + 8-stage 状态机 + event-driven backtest engine + risk-based sizing — **108 个单元测试全绿**
-- **阶段 2 第一波 backtest 已跑**：4 年 + 4 个月样本 (2022/3 - 2026/5)，29 笔 A 级 setup
-  - **Acceptance test 通过**：朋友描述的 May 6 笔代码 100% 复现（entry 4669.26 → TP 4709.26 = +$3948 net）
-  - Raw edge $9.54 / 笔（fixed 0.01 lot），Sharpe 0.94（raw）/ 0.60（20% 仓位 + 复利）
-  - 4 年中 4 个 calendar year 正收益，1 个亏损（2025 年只有 2 笔 setup 全输/BE）
-  - **结论：弱但真实的正 EV，但远没有 +484% 名义收益听起来那么诱人；20% 仓位 21 个月水下；超 Kelly 的 volatility drag 让 Sharpe 反而比 2% 仓位低**
-- **🚧 验证中**：等朋友答 3 个 validation 问题（哪 4 笔他会真下？漏检了哪些？capitulation 必须真破前低吗？）
+- **阶段 2 SMC 策略 MVP ✅**：7 个 structure primitives + 8-stage 状态机 + event-driven backtest engine + risk-based sizing
+- **阶段 2 第二波 ✅ 朋友 3 个 validation 全部落地**：
+  - 追问 #1 (Jan 16 missed) → 是 trend-pullback-buy 策略, 不同 setup, 我们 filter 正确, 无需改代码
+  - 追问 #2 (1-bar gap false positive) → `min_h4_bars_capitulation_to_bos = 3` 守卫已部署 (commit a91aecf)
+  - 追问 #3 (HH 必须低于 LH 但高于前 LH) → micro-CHoCH H1 stage 3b 已部署 (commit 8209503)
+  - **116 个单元测试全绿**（111 + 5 个 micro-CHoCH 专用 case）
+- **阶段 2 第三波 ✅ 4 年回测 + ablation + walk-forward** (commit 1407893)：
+  - **15 个 A 级 setup**（从 baseline 29 减半 — 14 个 V 反弹被新 filter 杀掉）
+  - **per-trade edge $11.88**（比 baseline $9.54 提升 25%）
+  - **Sharpe (Mode B fixed 0.01) = 0.81**, Mode C (2% risk) = 0.79, Mode A (20%) = 0.68
+  - **Win rate 46.7%** (7 TP / 5 SL / 3 BE)
+  - 2025 年完全无信号（gold 上涨年, BOS-reversal 不适用 — 这是好事, filter 正确拒绝）
+- **🚨 Walk-forward (6-month 滚动 8 窗口) 暴露关键问题**：
+  - 50% windows 零信号（连续 18 个月无交易: 2024-09→2026-03）
+  - **75% 总盈利来自 2023-09..2024-03 一个窗口**（regime concentration risk）
+  - In-sample $118.68 / Out-sample $39.88（OOS 只 1 笔成交, 统计意义弱）
+  - **结论 (mindset 修正)**：这是 **rare-event regime-dependent strategy**, 不是稳定 income generator。应该和别的策略组合用 (覆盖 trending-up/ranging regime), 或者把它当 occasional high-conviction play
+- **Ablation 发现** (run inline 5/13, 不需要重跑)：
+  - baseline 29 → only min-gap 20 → only micro-CHoCH 15 → both 15
+  - **min-gap 完全冗余**（所有它能杀的, micro-CHoCH 也能杀）
+  - 保留作为 cheap fast-path early-exit, 不删
 - **Repo**：https://github.com/UAACC/xauusd_quant ，main 分支
   - identity: per-repo `UAACC` / `61613205+UAACC@users.noreply.github.com`
   - **不带** `Co-Authored-By: Claude` trailer
-- **本地 vs origin**：本地 main **领先 origin/main 7 commits**（5/12 这一波尚未 push）
-- **commit 历史（5/12 当天）**：
+- **本地 vs origin**：本地 main == origin/main 同步（5/13 所有 commits 已 push）
+- **5/12-5/13 commit 历史（按时间倒序）**：
   ```
+  1407893  feat(backtest): walk-forward harness for OOS analysis
+  8209503  feat(bos_reversal): micro-CHoCH H1 stage 3b — structural filter
+  a91aecf  fix(bos_reversal): min-gap guard rejects oversold-bounce false positives
+  103e807  docs: HANDOFF rewrite for 5/12 EOD
   19ee5e4  feat(backtest): fixed-lot mode + Sharpe + 3-mode analytics script
   45e2cd1  fix(bos_reversal): dedup overlapping signals + cap capitulation->BOS staleness
-  5c1a2d0  feat(smc): end-to-end BOS-reversal MVP - sizing + state machine + event engine
+  5c1a2d0  feat(smc): end-to-end BOS-reversal MVP
   c3e90fe  feat(structure): SMC primitives second wave - trend, BOS, retest
   bb9fa39  feat(structure): SMC primitives - swings, volume surge, FVG, EMA
   b3cbddf  fixture: XAUUSD daily spec snapshot 2026-05-12
@@ -52,7 +70,7 @@
 |---|---|---|
 | 0 | MT5 + IC Markets 接通，demo 跑通第一笔 | ✅ 完成 |
 | 1 | tick/bar 数据管道 + broker time + cost model | ✅ 完成 (qa/spread_surface/swap_calendar 后续可选优化) |
-| 2 | Alpha 研究 — SMC/BOS reversal 策略 | ⚠️ MVP 完成 + 4 年回测出结果；等朋友 validation 后决定下一步 |
+| 2 | Alpha 研究 — SMC/BOS reversal 策略 | ✅ 策略代码完整 + filter 跟朋友 mental model 对齐 + 4 年 backtest + walk-forward。**结论：rare-event regime-dependent，单独用不够，需要 ensemble** |
 | 3 | MQL5 EA 实现：把 OOS 通过的策略翻译成 EA | 未开始 |
 | 4 | 风控层：仓位 sizing、止损、最大回撤熔断、新闻过滤 | 部分（sizing 已做，max DD 熔断 / news blackout 未做） |
 | 5 | 实盘：模拟 → 小资金 → 放量 | 未开始 |
@@ -102,8 +120,9 @@ pull_bars.py       # 多 timeframe 历史 bar
 live_monitor.py    # 10 Hz 实时 tick 监控 + 告警 + 每 5s flush parquet
 test_order.py      # 0.01 lot round-trip slippage 测试 (--execute 才发单)
 backtest_bb.py     # BB 策略回测 (教学)
-backtest_smc.py    # SMC 策略端到端入口 — 加载 H4+M15, 检测信号, 跑 event engine, 出 ledger
+backtest_smc.py    # SMC 策略端到端入口 — 加载 H4+H1+M15, 检测信号, 跑 event engine, 出 ledger
 analyze_smc.py     # 3 模式横向对比 (raw / 2% risk / 20% risk) + 年度切片 + equity curve
+walk_forward_smc.py # 6/12-month 滚动窗口分析, 检测 edge 是否稳定 vs 集中 (rare-event 诊断)
 ```
 
 ### Tests (`tests/`)
@@ -219,60 +238,66 @@ weekly_open         Monday 01:00 broker EEST = Sunday 22:00 UTC
 
 ## 7. 阶段 1 + 2 已完成 vs 待做
 
-### ✅ 已完成（2025/5/12 EOD）
-- 阶段 1 全部基础设施
-- 阶段 2 SMC MVP 完整链路
-- 12 个月数据 (XAUUSD H4/M15/M5) 历史回测过
-- 60 个月 H4 + 51 个月 M15/M5 已拉到本地
-- 4 年长样本回测 + 3 模式 sizing 对比 + 年度切片 + equity curve 分析
-- 4 笔 trade 故事详写（用户已读，发给朋友 validation）
+### ✅ 已完成（截至 2026/5/13 EOD）
+
+**阶段 1（数据基础设施）**：
+- tick/bar partitioned parquet (5 年 H4/H1/M15 + 3 月所有 TF)
+- BrokerClock + zoneinfo timezone robustness (Europe/Athens)
+- live_monitor 10 Hz polling + alerts + persistence
+- snapshot_spec 每日 audit 入 fixtures/
+
+**阶段 2（SMC 策略）**：
+- 7 个 structure primitives (`quant/structure/`)
+- 8-stage 状态机 `bos_reversal.py`（含 min-gap + micro-CHoCH 两个 V 反弹 filter）
+- Event-driven backtester `event_engine.py`（intrabar SL/TP/BE + 多模式 sizing + Sharpe）
+- Risk-based sizing `quant/risk/sizing.py`
+- 朋友 3 个 validation 问题全部答完 + 落地代码
+- 4 年 backtest + 3 模式分析 + walk-forward 8 窗口分析
+- **116 个单元测试全绿**
+
+**阶段 2 关键发现（必读）**：
+- baseline 29 → 加 micro-CHoCH 后 15（半数 V 反弹被过滤）
+- per-trade edge 提升 $9.54 → $11.88 (+25%)
+- Sharpe 0.79 (Mode C 2% risk) — 真实但弱 edge
+- Walk-forward 暴露 rare-event 性质：50% 窗口零信号、75% 盈利集中在 1 个窗口
+- 2025 整年零信号是 correct behavior（gold 上涨年, BOS-reversal 不适用）
+- min-gap 是 micro-CHoCH 的 subset, 当前数据上完全冗余, 保留作 fast-path
 
 ### 🚧 待做（按优先级；新 Claude 接手优先看这块）
 
-**P0 — 等朋友答 validation（人在回路，不阻塞其他事）**
-- 朋友需要回答：
-  1. 4 笔 setup 中哪些他会按自己规则真下？
-  2. 12 个月里有没有"教科书 setup"代码漏检？
-  3. capitulation 是不是必须真破前低（low < prior swing low）？
-- 如果他答 #3 是 yes → 加一条 capitulation 必破前低过滤，重跑 → 期待 #2 (12/10 SL) 被排除，剩下 setup 可能更干净
+**P0 — 接受 strategy 已收尾, 重新定位**
+策略代码层 spec 完成. 接下来不再"调 SMC 让它更好" — 数据明确告诉我们它是 rare-event regime-dependent 形态. 下一阶段是 **ensemble / 多策略组合**.
 
-**P1 — 扩样本（最高 ROI 的提升信号统计意义的方法）**
-- 把代码移植到 NQ（朋友说 NQ 同套参数也用） — 零代码改动，只是换 symbol
-  - 需要 IC Markets symbol：先查 `mt5.symbol_info("NAS100")` 之类
-  - cost model 数字要重算（NQ 不是 100 oz/lot）
-- 如果 IC 不提供 NQ，考虑加其他 broker 或换 symbol 思路
+**P1 — 移植到 NQ（最高 ROI 扩样本）**
+- 朋友 Q12: NQ 同套参数也用
+- 需要 IC Markets symbol：先查 `mt5.symbol_info("NAS100")` / `US100`
+- 改动：pull_bars 加 symbol 参数, cost model 重算 (NQ 不是 100 oz/lot)
+- 期待：如果 NQ 也有类似 win rate, 信号频率翻倍, 同样 strategy 可以跑两个 symbol
 
-**P2 — 加一个"必破前低"过滤**（如果朋友 #3 答 yes）
-- 改 `bos_reversal.py`：detect_bos_reversal_signals 加 param `require_capit_below_prior_low: bool = True`
-- 写测试：12/10 那笔在严格模式下应该被过滤掉
-- 重跑 50 月 backtest，对比 raw edge 变化
+**P2 — 加一个互补策略覆盖其他 regime**
+- SMC BOS-reversal 只抓 trending-down 转折
+- 需要：trend pullback buy (朋友 Jan 16 missed setup 的策略类型)
+- 或者：range-bound mean reversion (针对横盘期)
+- 或者：carry-aware short bias（用 swap 正 carry $48/night）
+- 目标：3 个互补策略组合，每个覆盖一个 regime
 
-**P3 — Walk-forward harness**
-- 当前 backtest 是 in-sample 整段，没分 train/test
-- 要加：滚动 12 月窗口或者按年切分；out-of-sample 评估
-- 这能告诉我们策略是不是过拟合到 2022-23 的市场
-
-**P4 — Regime filter（如果 P3 显示 2024-26 信号变少 / 表现变差）**
-- 加一个 ATR 或 vol-of-vol 检测器
-- 只在某些 regime 下做信号
-
-**P5 — 操作层（不依赖市场数据，可以并行）**
+**P3 — 操作层（不依赖市场数据，可并行）**
 - `quant/risk/circuit_breaker.py`：max_daily_loss + max_drawdown 强制停盘
 - `quant/risk/news_blackout.py`：CPI/NFP/FOMC 前后窗口屏蔽 entry（朋友 Q9）
-- `quant/risk/concurrency.py`：max-1-position 过滤器
+- `quant/risk/concurrency.py`：max-1-position 过滤器（朋友 Q14: 听大周期）
 
-**P6 — 空头 setup**
-- 镜像逻辑，但要求 multi-bar volume surge（黄金长期偏多, 朋友 Q13）
+**P4 — 空头 setup**
+- 镜像逻辑, 要求 multi-bar volume surge（黄金偏多, 朋友 Q13）
 - 加到 `bos_reversal.py`
 
-**P7 — 经验 spread surface**
+**P5 — 经验 spread surface**
 - `quant/costs/spread_surface.py`：从历史 tick 算 spread 分布 by (weekday, hour)
 - 接入 event_engine 替代 $12 常数
 
-**P8 — 长期 backlog**
-- Task #16: `pull_ticks --force --days-back 7` 重拉历史 tick（broker-time legacy 清理）
+**P6 — 长期 backlog**
 - `quant/data/qa.py`: gap detection / spread anomaly / weekend boundary
-- MT5 EA implementation (阶段 3)
+- MT5 EA implementation (阶段 3) — 当有 ensemble + 验证 OOS 后再做
+- 真实 demo paper trading: 让 live_monitor 持续采集, 每周自动跑 detector 看是否对得上手工执行
 
 ## 8. SMC/BOS reversal 策略 — 完整规格
 
@@ -309,22 +334,62 @@ Stage 8  Manage    BE move at +$15 profit; no trailing; partial close not implem
 ```
 
 ### 8.3 4 年回测的关键数字（reference）
+
+**Baseline (filter 上线前, 29 signals)**:
 ```
 样本: 2022-03-01 → 2026-05-12 (50 个月, ~6500 H4 bars, ~99k M15 bars)
 信号: 29 笔 A-grade long-only (空头未实现)
 TP/SL/BE: 12/10/7
 胜率 41.4%  (vs breakeven 33.3% at R:R 2:1)
+Per-trade raw edge: $9.54 / 0.01 lot
+年度: 2022 +$98 / 2023 +$118 / 2024 +$39 / 2025 -$20 / 2026 +$39
+信号频率: 9 → 12 → 4 → 2 → 2 (按年)
+```
+
+**Post-filter (min-gap + micro-CHoCH 上线后, 15 signals — 当前 production state)**:
+```
+信号: 15 笔 A-grade long-only (14 笔 V 反弹被 filter 杀掉)
+TP/SL/BE: 7/5/3
+胜率 46.7%  ← 比 baseline 41.4% 略升
+Per-trade raw edge: $11.88 / 0.01 lot  ← 比 baseline +25%
 
 3 模式对比:
-                  Net P&L      Max DD     Sharpe
-Mode A (20%)      +$48,402    -$23,834    0.60     ← +484% 但 21 个月水下, 心理崩
-Mode B (0.01 lot) +$276       -$80        0.94     ← 真实 raw edge, $9.54/笔
-Mode C (2%)       +$2,883     -$807       0.92     ← 现实可执行 sizing
+                  Net P&L     Max DD     Sharpe
+Mode A (20%)      +$23,901   -$6,125    0.68     ← +239%, 710 天水下
+Mode B (0.01 lot) +$178      -$40       0.81     ← raw edge $11.88/笔
+Mode C (2%)       +$1,742    -$402      0.79     ← 现实可执行 sizing
 
-Per-trade raw edge: $9.54 / 0.01 lot
-Sharpe 95% CI: [0.51, 1.37]  -- 在"一般正收益零售"和"顶尖零售"之间, N=29 区间宽
-年度: 2022 +$98 / 2023 +$118 / 2024 +$39 / 2025 -$20 / 2026 +$39 (固定 0.01 lot)
-信号频率: 9 → 12 → 4 → 2 → 2 (按年, 2024 起骤减, 可能 regime shift)
+年度 (固定 0.01 lot):
+  2022  5 trades  40% win   net +$39
+  2023  6 trades  50% win   net +$79  ← 最佳年
+  2024  2 trades  50% win   net +$20
+  2025  0 trades  (gold uptrend year, 策略正确不开仓)
+  2026  2 trades  50% win   net +$40  (含 May 6)
+
+Ablation:
+  baseline 29   → only min-gap 20   → only micro-CHoCH 15   → both 15
+  min-gap 完全是 micro-CHoCH 的子集 (但保留作 fast-path early-exit)
+```
+
+**Walk-forward (6-month 滚动 8 窗口, fixed 0.01 lot)**:
+```
+window                  n  win%  net      sharpe
+2022-03..2022-09        2   0%  -$20.24   -3.09
+2022-09..2023-03        5  40%  +$19.40   +0.44
+2023-03..2023-09        0   -    $0        0
+2023-09..2024-03        4  75% +$119.52   +6.54  ← 75% of total 集中于此
+2024-03..2024-09        1 100%  +$39.88    0
+2024-09..2025-03        0   -    $0        0    ← 沉睡
+2025-03..2025-09        0   -    $0        0    ← 沉睡  
+2025-09..2026-03        0   -    $0        0    ← 沉睡
+
+In-sample (前 4): +$118.68   positive 2/4
+Out-sample (后 4): +$39.88   positive 1/4   ← 仅 1 笔成交, 统计意义弱
+median net per window: $0    ← 一半窗口零机会
+
+诊断: rare-event regime-dependent strategy. 不是稳定 income generator. 
+75% 盈利来自 1 个窗口 (2023-09..2024-03, 明确 trending-down regime).
+2025 整年零信号 = 上涨年没有"下跌通道+capitulation"形态, filter 正确拒绝.
 ```
 
 ### 8.4 还原忠实度
