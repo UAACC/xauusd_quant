@@ -72,6 +72,9 @@ def detect_bos_reversal_signals(
     atr_period: int = 14,
     atr_sl_mult: float = 1.5,
     atr_tp_mult: float = 3.0,
+    d1_bars: pd.DataFrame | None = None,
+    require_d1_aligned: bool = False,
+    d1_ema_period: int = 50,
 ) -> list[BosReversalSignal]:
     """Scan H4 + M15 bars; return all A-grade long BOS-reversal signals.
 
@@ -121,6 +124,11 @@ def detect_bos_reversal_signals(
             "require_micro_choch=True but h1_bars not provided. Pass h1_bars "
             "covering at least the (capitulation, BOS) window, or set "
             "require_micro_choch=False to disable the structural filter."
+        )
+    if require_d1_aligned and d1_bars is None:
+        raise ValueError(
+            "require_d1_aligned=True but d1_bars not provided. Pass d1_bars "
+            "covering the backtest range, or set require_d1_aligned=False."
         )
 
     swings_h4 = detect_swings(h4_bars, n_left=fractal_n, n_right=fractal_n)
@@ -246,6 +254,23 @@ def detect_bos_reversal_signals(
         )
         if hold_idx is None:
             continue
+
+        # Stage 5c: D1 trend alignment filter.
+        # For LONG (down-trend reversal) setups, reject if D1 is clearly
+        # bullish (close > D1 EMA(period)) at the most-recent completed D1
+        # bar before BOS. Rationale: if D1 has already shifted bullish, the
+        # macro trend isn't bearish anymore — there's no setup to reverse.
+        # Accepts bearish OR neutral D1; rejects "buying into an existing
+        # uptrend" cases.
+        if require_d1_aligned:
+            prior_d1 = d1_bars[d1_bars["time"] < bos_time]
+            if len(prior_d1) >= d1_ema_period:
+                ema_series = prior_d1["close"].ewm(span=d1_ema_period, adjust=False).mean()
+                last_d1_close = float(prior_d1["close"].iloc[-1])
+                last_d1_ema = float(ema_series.iloc[-1])
+                if last_d1_close > last_d1_ema:
+                    continue
+            # If insufficient D1 warmup, fall through (don't reject early data)
 
         # Stage 6: emit signal at the close of the hold-completing M15 bar
         entry_bar = m15_bars.iloc[hold_idx]

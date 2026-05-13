@@ -146,13 +146,18 @@ def main() -> int:
     ap.add_argument("--atr-sl-mult", type=float, default=1.5)
     ap.add_argument("--atr-tp-mult", type=float, default=3.0)
     ap.add_argument("--atr-period", type=int, default=14)
+    ap.add_argument("--require-d1-aligned", action="store_true",
+                    help="reject signals when D1 close > D1 EMA50 (D1 already bullish)")
+    ap.add_argument("--d1-ema-period", type=int, default=50)
     args = ap.parse_args()
 
     print(f"loading {args.symbol} H4 + H1 + M15 bars: 2022-03 -> 2026-05 (50 months)")
     h4 = _load_months(args.symbol, "H4", (2022, 3), (2026, 5))
     h1 = _load_months(args.symbol, "H1", (2022, 3), (2026, 5))
     m15 = _load_months(args.symbol, "M15", (2022, 3), (2026, 5))
-    print(f"  H4  : {len(h4):,}   H1 : {len(h1):,}   M15 : {len(m15):,}")
+    d1 = _load_months(args.symbol, "D1", (2021, 6), (2026, 5)) if args.require_d1_aligned else None
+    print(f"  H4  : {len(h4):,}   H1 : {len(h1):,}   M15 : {len(m15):,}"
+          + (f"   D1: {len(d1):,}" if d1 is not None else ""))
 
     if args.use_atr_stops:
         print(f"\nstrategy params: ATR-scaled (period={args.atr_period}, "
@@ -169,6 +174,8 @@ def main() -> int:
         use_atr_stops=args.use_atr_stops,
         atr_sl_mult=args.atr_sl_mult, atr_tp_mult=args.atr_tp_mult,
         atr_period=args.atr_period,
+        d1_bars=d1, require_d1_aligned=args.require_d1_aligned,
+        d1_ema_period=args.d1_ema_period,
     )
     print(f"  {len(signals)} A-grade signals")
 
