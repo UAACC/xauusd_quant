@@ -128,13 +128,14 @@ def run_mode(label: str, signals, m15, **kwargs):
 
 
 def main() -> int:
-    print("loading H4 + M15 bars: 2022-03 -> 2026-05 (50 months)")
+    print("loading H4 + H1 + M15 bars: 2022-03 -> 2026-05 (50 months)")
     h4 = _load_months("H4", (2022, 3), (2026, 5))
+    h1 = _load_months("H1", (2022, 3), (2026, 5))
     m15 = _load_months("M15", (2022, 3), (2026, 5))
-    print(f"  H4  : {len(h4):,}   M15 : {len(m15):,}")
+    print(f"  H4  : {len(h4):,}   H1 : {len(h1):,}   M15 : {len(m15):,}")
 
     print("\ndetecting signals...")
-    signals = detect_bos_reversal_signals(h4, m15)
+    signals = detect_bos_reversal_signals(h4, m15, h1_bars=h1)
     print(f"  {len(signals)} A-grade signals")
 
     # Mode A: 20% risk, compounding

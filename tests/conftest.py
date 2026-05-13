@@ -35,3 +35,19 @@ def smc_h4_apr_may() -> pd.DataFrame:
     may = read_bars_month(DATA_ROOT, "XAUUSD", "H4", 2026, 5)
     df = pd.concat([apr, may], ignore_index=True).sort_values("time").reset_index(drop=True)
     return df
+
+
+@pytest.fixture(scope="session")
+def h1_apr_may() -> pd.DataFrame:
+    """H1 XAUUSD bars covering the friend's reference SMC setup.
+
+    Used by the micro-CHoCH structural filter (stage 3b in
+    ``bos_reversal``): on the May 6 reference, H1 n=2 fractal swings
+    at 05-05 02:00 (4546.69) and 05-05 14:00 (4586.68) form the
+    higher-high pair below the macro LH 4673.
+    """
+    from quant.data.parquet import read_bars_month
+
+    apr = read_bars_month(DATA_ROOT, "XAUUSD", "H1", 2026, 4)
+    may = read_bars_month(DATA_ROOT, "XAUUSD", "H1", 2026, 5)
+    return pd.concat([apr, may], ignore_index=True).sort_values("time").reset_index(drop=True)

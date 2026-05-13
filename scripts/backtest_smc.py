@@ -87,14 +87,16 @@ def main() -> int:
                     help="suppress per-trade ledger output")
     args = ap.parse_args()
 
-    print(f"loading H4 + M15 bars: {args.start} -> {args.end}")
+    print(f"loading H4 + H1 + M15 bars: {args.start} -> {args.end}")
     h4 = _load_months("H4", args.start, args.end)
+    h1 = _load_months("H1", args.start, args.end)
     m15 = _load_months("M15", args.start, args.end)
     print(f"  H4 bars  : {len(h4):>6,}  range {h4['time'].min()} -> {h4['time'].max()}")
+    print(f"  H1 bars  : {len(h1):>6,}  range {h1['time'].min()} -> {h1['time'].max()}")
     print(f"  M15 bars : {len(m15):>6,}  range {m15['time'].min()} -> {m15['time'].max()}")
 
     print("\ndetecting SMC BOS-reversal signals...")
-    signals = detect_bos_reversal_signals(h4, m15)
+    signals = detect_bos_reversal_signals(h4, m15, h1_bars=h1)
     print(f"  signals : {len(signals)}")
     for s in signals:
         rr_target = (s.tp_price - s.entry_price) / (s.entry_price - s.sl_price)

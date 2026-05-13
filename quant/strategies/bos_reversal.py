@@ -51,6 +51,7 @@ def detect_bos_reversal_signals(
     h4_bars: pd.DataFrame,
     m15_bars: pd.DataFrame,
     *,
+    h1_bars: pd.DataFrame | None = None,
     sl_distance: float = 20.0,
     tp_distance: float = 40.0,
     fractal_n: int = 2,
@@ -64,6 +65,8 @@ def detect_bos_reversal_signals(
     max_h4_bars_to_retest: int = 2,
     retest_max_distance_pct: float = 0.5,
     m15_hold_bars: int = 2,
+    require_micro_choch: bool = True,
+    micro_choch_timeframe_fractal_n: int = 2,
 ) -> list[BosReversalSignal]:
     """Scan H4 + M15 bars; return all A-grade long BOS-reversal signals.
 
@@ -98,10 +101,22 @@ def detect_bos_reversal_signals(
     6. Entry  : market BUY at the close of the bar that completes the hold.
                 SL = entry − ``sl_distance``;  TP = entry + ``tp_distance``.
 
+    Stage 3b (micro-CHoCH, friend追问 #3 follow-up): if
+    ``require_micro_choch`` is True, the post-capitulation rally must form
+    at least one higher-high swing pair on H1 with both highs strictly
+    below the macro LH. Rejects V-shaped reversals that lack internal
+    structure shift. Requires ``h1_bars`` to be provided.
+
     Short setups (mirror) are not implemented yet — TODO.
     """
     if h4_bars.empty or m15_bars.empty:
         return []
+    if require_micro_choch and h1_bars is None:
+        raise ValueError(
+            "require_micro_choch=True but h1_bars not provided. Pass h1_bars "
+            "covering at least the (capitulation, BOS) window, or set "
+            "require_micro_choch=False to disable the structural filter."
+        )
 
     swings_h4 = detect_swings(h4_bars, n_left=fractal_n, n_right=fractal_n)
     surges_h4 = detect_volume_surges(
@@ -154,7 +169,37 @@ def detect_bos_reversal_signals(
                 <= max_h4_bars_capitulation_to_bos):
             continue
 
-        # Stage 3b: M15 sustain — N consecutive closes above LH from the H4 BOS bar onward
+        # Stage 3b: micro-CHoCH on H1 between capitulation and BOS.
+        # Friend追问 #3 structural rule: in the (capitulation, BOS) window
+        # there must be at least one strict higher-high swing pair on H1,
+        # both below the macro LH. Rejects V-shaped reversals where price
+        # blasts straight through the LH without any internal structure
+        # shift. Concrete May 6 reference (IC feed): H1 n=2 fractal finds
+        # swings at 05-05 02:00 (4546.69) and 05-05 14:00 (4586.68); both
+        # < 4673 macro LH, and 4586.68 > 4546.69 → CHoCH confirmed.
+        if require_micro_choch:
+            h1_window = h1_bars[
+                (h1_bars["time"] > swing.time) & (h1_bars["time"] < bos_time)
+            ].reset_index(drop=True)
+            h1_swings = detect_swings(
+                h1_window,
+                n_left=micro_choch_timeframe_fractal_n,
+                n_right=micro_choch_timeframe_fractal_n,
+            )
+            micro_highs = [
+                s for s in h1_swings
+                if s.kind == "high" and s.price < prior_lh.price
+            ]
+            if len(micro_highs) < 2:
+                continue
+            has_higher_high = any(
+                micro_highs[i].price > micro_highs[i - 1].price
+                for i in range(1, len(micro_highs))
+            )
+            if not has_higher_high:
+                continue
+
+        # Stage 3c: M15 sustain — N consecutive closes above LH from the H4 BOS bar onward
         # Subtract 1 second to make 'after' inclusive of bars at bos_time.
         m15_sustain_idx = n_consecutive_closes_above(
             m15_bars, level=prior_lh.price, n=m15_bos_sustain,

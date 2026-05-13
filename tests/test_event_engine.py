@@ -183,8 +183,10 @@ def m15_apr_may() -> pd.DataFrame:
     return pd.concat([apr, may], ignore_index=True).sort_values("time").reset_index(drop=True)
 
 
-def test_apr_may_backtest_runs_end_to_end(smc_h4_apr_may, m15_apr_may):
-    signals = detect_bos_reversal_signals(smc_h4_apr_may, m15_apr_may)
+def test_apr_may_backtest_runs_end_to_end(smc_h4_apr_may, m15_apr_may, h1_apr_may):
+    signals = detect_bos_reversal_signals(
+        smc_h4_apr_may, m15_apr_may, h1_bars=h1_apr_may,
+    )
     rep = run_event_backtest(signals, m15_apr_may, initial_balance=10_000.0)
     assert rep.n_signals_evaluated >= 1
     # Either a closed trade or still-open at end of fixture is acceptable;
