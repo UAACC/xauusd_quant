@@ -563,6 +563,10 @@ DEFAULT_TIMEFRAME_LOOKBACKS: dict[str, pd.Timedelta] = {
     "M1":  pd.Timedelta(hours=6),
 }
 
+# Default focus universe for the discretionary-analyst project (XAGUSD + USTEC).
+# Use these as defaults for `scan_symbols()` when caller doesn't specify.
+DEFAULT_FOCUS_SYMBOLS: tuple[str, ...] = ("XAGUSD", "USTEC")
+
 # Cross-asset baseline for XAUUSD analyst commentary. IC Markets demo doesn't
 # carry DXY directly; EURUSD is the largest DXY component and serves as USD-
 # strength inverse proxy (EUR ~58% of DXY weight). US500/USTEC frame the risk
@@ -789,6 +793,122 @@ def pull_live_context(
         if "M15" in bars:
             result["m15_bars"] = bars["M15"]
         return result
+    finally:
+        mt5.shutdown()
+
+
+def scan_symbols(
+    symbols: Optional[list[str] | tuple[str, ...]] = None,
+    *,
+    timeframes: Optional[dict[str, pd.Timedelta]] = None,
+) -> dict[str, dict]:
+    """Batch-pull multi-TF data for multiple symbols in a single MT5 session.
+
+    Designed for scanner-style "what's setting up across my watchlist" workflow.
+    Faster than calling pull_live_context per symbol because we share the MT5
+    connection, the clock discovery, and the broker symbol-select warmup.
+
+    Args:
+        symbols: list of primary symbols to scan. Defaults to
+            DEFAULT_FOCUS_SYMBOLS (XAGUSD + USTEC).
+        timeframes: per-TF lookback dict. Defaults to DEFAULT_TIMEFRAME_LOOKBACKS
+            (7 TFs from D1 to M1).
+
+    Returns:
+        dict mapping symbol -> {
+            "bars": dict[tf_name, pd.DataFrame],
+            "tick_bid": float,
+            "tick_ask": float,
+            "live_spread_pts": float,
+            "contract_size": float,
+            "point": float,
+            "snapshot_utc": str,
+        }
+        Symbols that fail to pull get {"error": "..."} instead.
+
+    Per-symbol latency: ~5-30ms warm cache. 2 symbols = ~50-100ms total.
+    """
+    import sys as _sys
+    from datetime import datetime as _dt, timezone as _tz
+    _sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+    from mt5_connect import init_mt5  # noqa: E402
+    import MetaTrader5 as mt5  # noqa: E402
+    from quant.config import get_demo_mt5_path  # noqa: E402
+    from quant.data.broker_time import discover_clock  # noqa: E402
+
+    if symbols is None:
+        symbols = list(DEFAULT_FOCUS_SYMBOLS)
+    if timeframes is None:
+        timeframes = dict(DEFAULT_TIMEFRAME_LOOKBACKS)
+
+    _tf_const_for = {
+        "D1": "TIMEFRAME_D1", "H4": "TIMEFRAME_H4", "H1": "TIMEFRAME_H1",
+        "M30": "TIMEFRAME_M30", "M15": "TIMEFRAME_M15",
+        "M5": "TIMEFRAME_M5", "M1": "TIMEFRAME_M1",
+    }
+    unknown = set(timeframes) - set(_tf_const_for)
+    if unknown:
+        raise ValueError(f"unknown timeframes: {sorted(unknown)}")
+
+    if not init_mt5(terminal_path=get_demo_mt5_path()):
+        raise RuntimeError("MT5 init failed")
+
+    try:
+        # Use first available symbol for clock discovery
+        clock = None
+        for s in symbols:
+            if mt5.symbol_select(s, True):
+                acct = mt5.account_info()
+                clock = discover_clock(mt5, acct.server, s)
+                break
+        if clock is None:
+            raise RuntimeError("could not discover clock from any symbol")
+
+        end_utc = _dt.now(tz=_tz.utc)
+        results: dict[str, dict] = {}
+
+        for sym in symbols:
+            try:
+                if not mt5.symbol_select(sym, True):
+                    results[sym] = {"error": "symbol_select failed"}
+                    continue
+                info = mt5.symbol_info(sym)
+                tick = mt5.symbol_info_tick(sym)
+                if info is None or tick is None:
+                    results[sym] = {"error": "info or tick None"}
+                    continue
+
+                bars: dict[str, pd.DataFrame] = {}
+                for tf_name, lookback in timeframes.items():
+                    tf_const = getattr(mt5, _tf_const_for[tf_name])
+                    sb = clock.utc_dt_to_broker_naive(end_utc - lookback)
+                    eb = clock.utc_dt_to_broker_naive(end_utc)
+                    rates = mt5.copy_rates_range(sym, tf_const, sb, eb)
+                    if rates is None or len(rates) == 0:
+                        continue
+                    df = pd.DataFrame(rates)
+                    df["time"] = df["time"].apply(
+                        lambda s: pd.Timestamp(
+                            clock.broker_msc_to_utc_msc(int(s) * 1000),
+                            unit="ms", tz="UTC",
+                        )
+                    )
+                    bars[tf_name] = df
+
+                results[sym] = {
+                    "bars": bars,
+                    "tick_bid": float(tick.bid),
+                    "tick_ask": float(tick.ask),
+                    "live_spread_pts": (tick.ask - tick.bid) / info.point,
+                    "contract_size": float(info.trade_contract_size),
+                    "point": float(info.point),
+                    "snapshot_utc": end_utc.isoformat(),
+                }
+            except Exception as exc:  # noqa: BLE001
+                results[sym] = {"error": str(exc)}
+
+        return results
     finally:
         mt5.shutdown()
 
