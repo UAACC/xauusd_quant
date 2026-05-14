@@ -592,41 +592,87 @@ records = journal.load()  # list[dict]
 - `reason` 必须是 `tp|sl|be|manual|trail|time_stop` 之一
 - 时间戳一律 UTC ISO `YYYY-MM-DDTHH:MM:SSZ`
 
-### 15.2 还没建（这个新 session 的第一批活）
+### 15.2 已建 — `live_analysis/eval_trade.py`
 
-按 ROI 顺序（详细需求见用户对话里"5 个东西"清单）:
+候选 trade 的"裁判"工具。给定 `symbol/side/entry/sl/tp`,跑 6 项检查输出结构化报告:
 
-1. **`live_analysis/eval_trade.py`** — 给一个 candidate (symbol/side/entry/SL/TP), 输出结构化"裁判"报告:
-   - R:R check (≥ 1.5)
-   - 当前是否满足 BOS-reversal stage 1–7（用 `quant.strategies.bos_reversal` 跑当前 bar）
-   - Live spread vs P95
-   - News blackout check（依赖未来的 #4 calendar）
-   - Position sizing 推荐
-   - Cost 估算
-   - **必须同时调 `journal.log_skip(...)` 如果裁定 reject**
+| Check | 内容 |
+|---|---|
+| `orientation` | long 要求 `sl<entry<tp`; short 要求 `tp<entry<sl`(防 SL/TP 接反) |
+| `rr` | R:R ≥ 1.5 |
+| `signal_match` | strategy detector 在最近 4 个 M15 bar 内是否 emit A-grade 信号,且 entry 与 strategy 推荐 entry 在 0.5% 内 |
+| `spread` | live spread 对比 60-bar `spread` P95 (floor 20pt warn / 40pt fail,与 live_monitor 对齐) |
+| `news` | 当前 `SKIP` — fixtures/news_calendar.csv 未建 |
+| `sizing` + `cost` | 用 `quant.risk.sizing.lots_for_risk` 算 lot,带 IC Markets 真实 commission/contract_size |
 
-2. **`live_analysis/live_scan.py`** — 拉最近 N 天 H4/H1/M15, 跑 strategy, 输出"现在每个 symbol 各处于哪个 stage"。回答"现在有没有正在 cooking 的 setup"
+**强行为**:
+- 任何 check `fail` -> verdict `reject` -> 自动 `journal.log_skip(...)` 记录(可用 `journal_skip_on_reject=False` 关掉)
+- 短仓候选自动 `fail` signal_match (`bos_reversal.py` 还不 emit short 信号 — 见 §7 P4)
+- 短路型 `orientation` 第一位,先抓掉最致命的"SL/TP 弄反"
 
-3. **`live_analysis/monitor_positions.py`** — 15 min 轮询 open positions, 离 SL/TP 多少 pt, 是否该 trail, swap 累积, spread 异常告警
+**两条数据路径**:
 
-4. **`fixtures/news_calendar.csv`** — 手维护 CPI/NFP/FOMC, eval_trade 交叉引用
+```python
+# 1. 测试 / 离线 — 注入参数,纯函数,无 MT5
+from live_analysis.eval_trade import evaluate_trade
+report = evaluate_trade(
+    symbol="XAUUSD", direction="long",
+    entry=4669.26, sl=4649.26, tp=4709.26,
+    h4_bars=df_h4, h1_bars=df_h1, m15_bars=df_m15,
+    account_balance=10_000.0, live_spread_pts=12,
+)
+print(report.verdict)  # 'accept' or 'reject'
+for c in report.checks:
+    print(c.status, c.name, c.label)
 
-### 15.3 强约束（不要破）
-
-- **不要让任何脚本下真实 order**。所有执行用户手动在 MT5 GUI 完成；这些工具只是"副驾驶 / 裁判"。
-- **不要在 analyst-mode 里改 `quant/` 的策略代码**。策略已 frozen, 见 §8。
-  唯一允许的"修改" `quant/` 是修明确的 bug，要先告知用户。
-- **不要 evangelize 加 filter 或调参数**。如果 candidate 不符合规则，输出"不符合 + 哪条规则不过"，不要发明新规则去 fit。
-- 每笔 trade decision（无论 take / skip）都要进 journal。手动维护 journal = retail 失败的核心原因之一。
-
-### 15.4 测试 / 跑法
-
-```powershell
-# 跑 journal tests
-.\.venv\Scripts\python.exe -m pytest live_analysis/tests/ -v
-
-# 跑全套 (确认没动到 quant/)
-.\.venv\Scripts\python.exe -m pytest
+# 2. 实时 — MT5 demo 抓 tick/spec/bars
+from live_analysis.eval_trade import pull_live_context, evaluate_trade
+ctx = pull_live_context("XAUUSD", months_back=2)  # 复用 scripts/mt5_connect.init_mt5 的 LIVE-abort 守卫
+report = evaluate_trade(symbol="XAUUSD", direction="long",
+    entry=..., sl=..., tp=..., **ctx)
 ```
 
-当前: **129 passed**（116 quant + 13 journal）。
+**CLI 用法**:
+
+```powershell
+# Default: 连 demo MT5 拉 live tick + spec + bars + 账户余额
+.\.venv\Scripts\python.exe -m live_analysis.eval_trade `
+    --symbol XAUUSD --side long --entry 4669.26 --sl 4649.26 --tp 4709.26
+
+# Offline: 用 parquet + IC Markets 常量 (非 Windows / 测试用)
+.\.venv\Scripts\python.exe -m live_analysis.eval_trade --offline `
+    --symbol XAUUSD --side long --entry 4669.26 --sl 4649.26 --tp 4709.26 `
+    --account-balance 10000 --spread-pts 12
+```
+
+Exit code: 0 = accept, 1 = reject (脚本管线可用)。
+
+**复用的 scripts/ 模块**:
+- `scripts/mt5_connect.py::init_mt5` — `trade_mode==2 → abort` LIVE 守卫
+- `scripts/mt5_connect.py::build_cost_model` — 从 broker 拿 contract_size/point/swap
+- 暂未抽出共享 lib;`pull_live_context()` 用 `sys.path.insert` 直接 import
+
+### 15.3 还没建
+
+1. **`live_analysis/live_scan.py`** — 拉最近 N 天 H4/H1/M15, 跑 strategy, 输出"现在每个 symbol 各处于哪个 stage"
+2. **`live_analysis/monitor_positions.py`** — 15 min 轮询 open positions, 离 SL/TP 多少 pt, 是否该 trail, swap 累积, spread 异常告警
+3. **`fixtures/news_calendar.csv`** — 手维护 CPI/NFP/FOMC, eval_trade `news` check 才能从 skip 变 pass/fail
+4. **eval_trade v2 — per-stage diagnostic**: 当前 signal_match 只输出"匹配/不匹配"。v2 可加"卡在 stage X"细节(例如"H4 close 4658 未上穿 LH 4673")
+
+### 15.4 强约束(不要破)
+
+- **不要让任何脚本下真实 order**。所有执行用户手动在 MT5 GUI 完成;这些工具只是"副驾驶 / 裁判"。
+- **不要在 analyst-mode 里改 `quant/` 的策略代码**。策略已 frozen, 见 §8。
+  唯一允许的"修改" `quant/` 是修明确的 bug,要先告知用户。
+- **不要 evangelize 加 filter 或调参数**。如果 candidate 不符合规则,输出"不符合 + 哪条规则不过",不要发明新规则去 fit。
+- 每笔 trade decision(无论 take / skip)都要进 journal。手动维护 journal = retail 失败的核心原因之一。
+- ASCII-only 输出: PowerShell 默认 GBK codepage,所有 CheckResult.label/detail 已避免 unicode (`>=` not `≥`, `->` not `→`, `--` not `—`, `x` not `×`)。新写 check 时保持。
+
+### 15.5 测试 / 跑法
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest live_analysis/tests/ -v   # live_analysis only
+.\.venv\Scripts\python.exe -m pytest                            # 全套
+```
+
+当前: **149 passed** (116 quant + 13 journal + 20 eval_trade)。
