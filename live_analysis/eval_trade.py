@@ -553,26 +553,87 @@ def load_recent_bars(
     return out
 
 
-def pull_live_context(symbol: str, months_back: int = 2) -> dict:
-    """Connect to demo MT5 and pull everything ``evaluate_trade`` needs.
+DEFAULT_TIMEFRAME_LOOKBACKS: dict[str, pd.Timedelta] = {
+    "D1":  pd.Timedelta(days=180),
+    "H4":  pd.Timedelta(days=60),
+    "H1":  pd.Timedelta(days=30),
+    "M30": pd.Timedelta(days=10),
+    "M15": pd.Timedelta(days=10),
+    "M5":  pd.Timedelta(days=3),
+    "M1":  pd.Timedelta(hours=6),
+}
 
-    Returns a dict whose keys plug straight into ``evaluate_trade`` kwargs:
-    ``h4_bars``, ``h1_bars``, ``m15_bars``, ``live_spread_pts``,
-    ``contract_size``, ``point``, ``commission_roundtrip_usd_per_lot``,
-    ``min_lot_step``, ``account_balance``, plus diagnostic keys ``server``
-    and ``account_login``.
+# Cross-asset baseline for XAUUSD analyst commentary. IC Markets demo doesn't
+# carry DXY directly; EURUSD is the largest DXY component and serves as USD-
+# strength inverse proxy (EUR ~58% of DXY weight). US500/USTEC frame the risk
+# regime; XAGUSD is precious-metals confluence; XTIUSD is commodity carry;
+# BTCUSD probes the alt-safe-haven correlation regime.
+DEFAULT_CROSS_ASSET_FOR_XAUUSD: tuple[str, ...] = (
+    "EURUSD",   # DXY-inverse proxy
+    "US500",    # risk-on
+    "USTEC",    # risk-on (tech-heavy)
+    "XAGUSD",   # precious confluence
+    "XTIUSD",   # commod carry
+    "BTCUSD",   # alt-safe-haven
+)
 
-    Safety: re-uses ``scripts/mt5_connect.init_mt5`` which hard-aborts if
-    bound to a LIVE account (``trade_mode == 2``). Demo-only by construction.
+
+def pull_live_context(
+    symbol: str,
+    *,
+    timeframes: Optional[dict[str, pd.Timedelta]] = None,
+    cross_asset_symbols: Optional[list[str] | tuple[str, ...]] = None,
+    months_back: Optional[int] = None,
+) -> dict:
+    """Connect to demo MT5 and pull a full multi-TF + cross-asset snapshot.
+
+    Returns a dict with three sections:
+
+    1. Back-compat (kwargs straight into ``evaluate_trade``):
+       ``h4_bars``, ``h1_bars``, ``m15_bars``, ``live_spread_pts``,
+       ``contract_size``, ``point``, ``commission_roundtrip_usd_per_lot``,
+       ``min_lot_step``, ``account_balance``.
+
+    2. Multi-TF (for analyst commentary):
+       ``bars: dict[str, pd.DataFrame]`` keyed by TF name ("D1", "H4",
+       "H1", "M30", "M15", "M5", "M1"). Per-TF lookbacks chosen to give
+       useful history without bloating M1 (default: D1=180d, H4=60d,
+       H1=30d, M30/M15=10d, M5=3d, M1=6h).
+
+    3. Cross-asset snapshot (each symbol gets tick + D1 + recent change %):
+       ``cross_asset: dict[str, dict]`` with keys
+       ``{bid, ask, spread_pts, last_close, d1_change_pct, d5_change_pct,
+       d20_change_pct, atr_h4_recent}``. Default symbol set for XAUUSD
+       primary is ``DEFAULT_CROSS_ASSET_FOR_XAUUSD``.
+
+    Plus diagnostic: ``server``, ``account_login``.
+
+    Args:
+        symbol: primary symbol for full multi-TF pull + cost model.
+        timeframes: TF name -> lookback. Defaults to all 7 TFs.
+            Pass ``{"H4": Timedelta(days=60), ...}`` to override.
+            Strategy back-compat requires H4/H1/M15 to be present.
+        cross_asset_symbols: symbols to include in the cross-asset block.
+            Pass ``[]`` to skip cross-asset entirely; ``None`` uses the
+            XAUUSD default. Each pulled symbol adds <5ms total.
+        months_back: deprecated; ignored if ``timeframes`` is given.
+            Without ``timeframes`` and with ``months_back`` set, uses
+            legacy H4/H1/M15-only behavior anchored at month start.
+
+    Safety: ``scripts/mt5_connect.init_mt5`` hard-aborts if bound to a
+    LIVE account (``trade_mode == 2``). Demo-only by construction.
 
     Raises:
-        RuntimeError: if MT5 init / symbol selection / data pull fails.
+        RuntimeError: if MT5 init / symbol selection / data pull fails for
+            the primary symbol. Cross-asset symbols that fail are reported
+            as ``{"error": "..."}`` in the cross_asset dict, not raised --
+            losing a confluence ticker shouldn't kill the whole snapshot.
         FileNotFoundError: if no demo terminal path resolves.
 
-    Windows-only (MT5 Python is Windows-only). On other platforms use the
-    ``--offline`` parquet fallback.
+    Windows-only (MT5 Python is Windows-only). On other platforms use
+    ``--offline`` (parquet fallback) for the strategy bars; cross-asset
+    snapshot has no offline equivalent.
     """
-    # Lazy imports keep the module importable on non-Windows where MT5 is absent.
     import sys as _sys
     from datetime import datetime as _dt, timezone as _tz
     _sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -583,8 +644,47 @@ def pull_live_context(symbol: str, months_back: int = 2) -> dict:
     from quant.config import get_demo_mt5_path  # noqa: E402
     from quant.data.broker_time import discover_clock  # noqa: E402
 
+    # Resolve TF set: explicit > legacy months_back > default 7-TF
+    if timeframes is None:
+        if months_back is not None:
+            # Legacy: strategy-only TFs, anchored at month start. Lookback
+            # in calendar months -- approximate with timedelta below.
+            timeframes = {
+                "H4":  pd.Timedelta(days=30 * (months_back + 1)),
+                "H1":  pd.Timedelta(days=30 * (months_back + 1)),
+                "M15": pd.Timedelta(days=30 * (months_back + 1)),
+            }
+        else:
+            timeframes = dict(DEFAULT_TIMEFRAME_LOOKBACKS)
+
+    if cross_asset_symbols is None:
+        cross_asset_symbols = list(DEFAULT_CROSS_ASSET_FOR_XAUUSD)
+
+    _tf_const_for = {
+        "D1": "TIMEFRAME_D1",
+        "H4": "TIMEFRAME_H4",
+        "H1": "TIMEFRAME_H1",
+        "M30": "TIMEFRAME_M30",
+        "M15": "TIMEFRAME_M15",
+        "M5": "TIMEFRAME_M5",
+        "M1": "TIMEFRAME_M1",
+    }
+    unknown = set(timeframes) - set(_tf_const_for)
+    if unknown:
+        raise ValueError(f"unknown timeframes: {sorted(unknown)}; "
+                         f"valid: {sorted(_tf_const_for)}")
+
     if not init_mt5(terminal_path=get_demo_mt5_path()):
         raise RuntimeError("MT5 init failed; see stderr for the underlying error")
+
+    def _bars_to_df(rates, clock) -> pd.DataFrame:
+        df = pd.DataFrame(rates)
+        df["time"] = df["time"].apply(
+            lambda s: pd.Timestamp(
+                clock.broker_msc_to_utc_msc(int(s) * 1000), unit="ms", tz="UTC",
+            )
+        )
+        return df
 
     try:
         info = get_symbol_info(symbol)
@@ -603,44 +703,73 @@ def pull_live_context(symbol: str, months_back: int = 2) -> dict:
 
         acct = mt5.account_info()
         clock = discover_clock(mt5, acct.server, symbol)
-
         end_utc = _dt.now(tz=_tz.utc)
-        # Anchor start at the first of (month - months_back) so we get a
-        # complete warmup window. Calendar math via pandas DateOffset.
-        start_utc = (
-            (pd.Timestamp(end_utc) - pd.DateOffset(months=months_back))
-            .replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            .to_pydatetime()
-            .replace(tzinfo=_tz.utc)
-        )
 
-        timeframes = (
-            ("H4", mt5.TIMEFRAME_H4),
-            ("H1", mt5.TIMEFRAME_H1),
-            ("M15", mt5.TIMEFRAME_M15),
-        )
+        # Primary symbol: pull all requested timeframes
         bars: dict[str, pd.DataFrame] = {}
-        for tf_name, tf_const in timeframes:
-            sb = clock.utc_dt_to_broker_naive(start_utc)
+        for tf_name, lookback in timeframes.items():
+            tf_const = getattr(mt5, _tf_const_for[tf_name])
+            sb = clock.utc_dt_to_broker_naive(end_utc - lookback)
             eb = clock.utc_dt_to_broker_naive(end_utc)
             rates = mt5.copy_rates_range(symbol, tf_const, sb, eb)
             if rates is None or len(rates) == 0:
                 raise RuntimeError(
-                    f"copy_rates_range({tf_name}) returned empty for "
-                    f"{symbol} {start_utc.date()} -> {end_utc.date()}"
+                    f"copy_rates_range({symbol}, {tf_name}, lookback={lookback}) "
+                    f"returned empty"
                 )
-            df = pd.DataFrame(rates)
-            df["time"] = df["time"].apply(
-                lambda s: pd.Timestamp(
-                    clock.broker_msc_to_utc_msc(int(s) * 1000), unit="ms", tz="UTC",
-                )
-            )
-            bars[tf_name] = df
+            bars[tf_name] = _bars_to_df(rates, clock)
 
-        return {
-            "h4_bars": bars["H4"],
-            "h1_bars": bars["H1"],
-            "m15_bars": bars["M15"],
+        # Cross-asset block: tick + D1(60d) + simple change % for each
+        cross_asset: dict[str, dict] = {}
+        for sym in cross_asset_symbols:
+            try:
+                if not mt5.symbol_select(sym, True):
+                    cross_asset[sym] = {"error": "symbol_select failed"}
+                    continue
+                ca_info = mt5.symbol_info(sym)
+                ca_tick = mt5.symbol_info_tick(sym)
+                if ca_info is None or ca_tick is None:
+                    cross_asset[sym] = {"error": "info or tick None"}
+                    continue
+                d1_lookback = pd.Timedelta(days=60)
+                sb = clock.utc_dt_to_broker_naive(end_utc - d1_lookback)
+                eb = clock.utc_dt_to_broker_naive(end_utc)
+                d1_rates = mt5.copy_rates_range(sym, mt5.TIMEFRAME_D1, sb, eb)
+                if d1_rates is None or len(d1_rates) < 2:
+                    cross_asset[sym] = {
+                        "bid": ca_tick.bid, "ask": ca_tick.ask,
+                        "spread_pts": (ca_tick.ask - ca_tick.bid) / ca_info.point,
+                        "error": "insufficient D1 history",
+                    }
+                    continue
+                d1 = _bars_to_df(d1_rates, clock)
+                last_close = float(d1["close"].iloc[-1])
+
+                def _pct_change(n: int) -> Optional[float]:
+                    if len(d1) <= n:
+                        return None
+                    base = float(d1["close"].iloc[-n - 1])
+                    return (last_close / base - 1) * 100 if base != 0 else None
+
+                # Simple ATR-ish proxy: mean of last 14 D1 true ranges
+                tr = (d1["high"] - d1["low"]).abs()
+                atr_d1_14 = float(tr.tail(14).mean())
+
+                cross_asset[sym] = {
+                    "bid": float(ca_tick.bid),
+                    "ask": float(ca_tick.ask),
+                    "spread_pts": (ca_tick.ask - ca_tick.bid) / ca_info.point,
+                    "last_close": last_close,
+                    "d1_change_pct": _pct_change(1),
+                    "d5_change_pct": _pct_change(5),
+                    "d20_change_pct": _pct_change(20),
+                    "atr_d1_14": atr_d1_14,
+                }
+            except Exception as exc:  # noqa: BLE001
+                cross_asset[sym] = {"error": str(exc)}
+
+        # Back-compat: only populate strategy keys if those TFs were pulled
+        result: dict = {
             "live_spread_pts": live_spread_pts,
             "contract_size": float(info.trade_contract_size),
             "point": float(info.point),
@@ -649,7 +778,17 @@ def pull_live_context(symbol: str, months_back: int = 2) -> dict:
             "account_balance": float(acct.balance),
             "server": acct.server,
             "account_login": int(acct.login),
+            "bars": bars,
+            "cross_asset": cross_asset,
+            "snapshot_utc": end_utc.isoformat(),
         }
+        if "H4" in bars:
+            result["h4_bars"] = bars["H4"]
+        if "H1" in bars:
+            result["h1_bars"] = bars["H1"]
+        if "M15" in bars:
+            result["m15_bars"] = bars["M15"]
+        return result
     finally:
         mt5.shutdown()
 
@@ -738,12 +877,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         kwargs["account_balance"] = args.account_balance
         kwargs["live_spread_pts"] = args.spread_pts
     else:
-        ctx = pull_live_context(args.symbol, months_back=args.months_back)
+        ctx = pull_live_context(args.symbol)
+        tf_summary = ", ".join(
+            f"{name}({len(df):,}b)" for name, df in ctx["bars"].items()
+        )
+        ca_summary = ", ".join(ctx["cross_asset"].keys())
         print(
             f"[MT5] {ctx['server']} acct={ctx['account_login']} "
             f"balance=${ctx['account_balance']:,.2f} "
             f"spread={ctx['live_spread_pts']:.0f}pt"
         )
+        print(f"[BARS] {tf_summary}")
+        print(f"[CROSS] {ca_summary}")
         kwargs.update({
             "h4_bars": ctx["h4_bars"],
             "h1_bars": ctx["h1_bars"],
