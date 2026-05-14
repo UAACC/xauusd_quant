@@ -147,6 +147,61 @@ def init_mt5(
     return True
 
 
+def init_mt5_live(
+    login: int | None = None,
+    password: str | None = None,
+    server: str | None = None,
+    terminal_path: str | None = None,
+    allow_orders: bool = False,
+) -> bool:
+    """Connect to MT5 with LIVE account permitted.
+
+    Does NOT abort on trade_mode == 2 (REAL). Use this only from the
+    live-authorized execute path. See feedback-execute-authorization memory.
+
+    Args:
+        login/password/server: optional — if MT5 terminal is already logged in,
+            leave them as None (Python will attach to current session).
+        terminal_path: absolute path to terminal64.exe.
+        allow_orders: must be explicitly True for any path that may call
+            ``mt5.order_send``. Default False -- read-only by convention.
+
+    Returns True on success, False otherwise. Prints account / mode info.
+    """
+    kwargs: dict = {}
+    if terminal_path:
+        kwargs["path"] = terminal_path
+    if login is not None:
+        kwargs["login"] = int(login)
+    if password is not None:
+        kwargs["password"] = password
+    if server is not None:
+        kwargs["server"] = server
+
+    if not mt5.initialize(**kwargs):
+        print(f"[ERROR] MT5 initialize failed: {mt5.last_error()}", file=sys.stderr)
+        return False
+
+    acct = mt5.account_info()
+    term = mt5.terminal_info()
+    if acct is None or term is None:
+        print(f"[ERROR] account_info / terminal_info None: {mt5.last_error()}",
+              file=sys.stderr)
+        mt5.shutdown()
+        return False
+
+    mode_label = {0: "DEMO", 1: "CONTEST", 2: "REAL"}.get(acct.trade_mode, "?")
+    write_status = "ORDERS-ENABLED" if allow_orders else "READ-ONLY"
+    print(f"[OK-LIVE] Connected ({write_status}).")
+    print(f"     Server   : {acct.server}")
+    print(f"     Account  : {acct.login}  ({mode_label})")
+    print(f"     Balance  : {acct.balance} {acct.currency}   Leverage: 1:{acct.leverage}")
+    print(f"     Terminal : {term.name} build {term.build}  connected={term.connected}")
+    if acct.trade_mode == 2:
+        print(f"     ** REAL ACCOUNT ** — orders go to live market")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Symbol specification
 # ---------------------------------------------------------------------------

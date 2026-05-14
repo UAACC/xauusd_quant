@@ -50,3 +50,4 @@ Thumbs.db
 *.log
 backtest_results/
 ea_logs/
+live_analysis/reports/
