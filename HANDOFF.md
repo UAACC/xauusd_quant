@@ -541,3 +541,92 @@ git config user.email "61613205+UAACC@users.noreply.github.com"
 - **不接受** timing-conservative 建议
 - **会问基础概念澄清**（"BE 是什么意思" / "raw edge 怎么算的" / "Sharpe 多少"），首次出现要简短解释，二次默认理解
 - **Calgary** 时区，所有时段建议用 Calgary local time
+
+---
+
+## 15. Analyst-mode infra (`live_analysis/`) — pre-built for 副驾驶 session
+
+> 这一节专门给"实时交易策略分析师"角色的新 session 看。
+> 策略研究 (`quant/`) 已 frozen, 接下来是 live operation 阶段。
+> 工具放在 **新 package `live_analysis/`**，跟 strategy research 代码物理隔离。
+
+### 15.1 已建好（2026-05-13）
+
+**`live_analysis/journal.py`** — JSONL trade journal (append-only, 13 unit tests 全绿)
+
+```python
+from live_analysis import journal
+
+# 入场: 返回 trade_id, 自己存住, 后面 log_exit 要用
+tid = journal.log_entry(
+    symbol="XAUUSD", direction="long", lots=0.1,
+    entry=4669.26, sl=4649.26, tp=4709.26,
+    rationale="BOS-reversal A-grade, May 4 capit",
+    live_spread_pts=10, live_session="London-NY overlap",
+)
+
+# 出场
+journal.log_exit(
+    trade_id=tid, symbol="XAUUSD",
+    exit_price=4709.26, reason="tp", net_pnl=438.68,
+)
+
+# 看了但拒绝的 setup — weekly review 时用这个分母算"守规则率"
+journal.log_skip(
+    symbol="XAUUSD", direction="long",
+    reason="H4 trend not down — only 2 LL in last 6 swings",
+    rule_failed="stage_1_h4_trend",
+    candidate={"entry": 4665, "sl": 4645, "tp": 4705},
+)
+
+# 读所有记录
+records = journal.load()  # list[dict]
+```
+
+文件落在 `live_analysis/data/trade_journal.jsonl`（gitignored, 含账户数据不入 repo）。
+
+**验证字段**:
+- `direction` 必须是 `"long" | "short"`
+- `lots > 0`
+- `long`: `sl < entry < tp` / `short`: `tp < entry < sl`（防 SL/TP 接反这种致命 bug）
+- `reason` 必须是 `tp|sl|be|manual|trail|time_stop` 之一
+- 时间戳一律 UTC ISO `YYYY-MM-DDTHH:MM:SSZ`
+
+### 15.2 还没建（这个新 session 的第一批活）
+
+按 ROI 顺序（详细需求见用户对话里"5 个东西"清单）:
+
+1. **`live_analysis/eval_trade.py`** — 给一个 candidate (symbol/side/entry/SL/TP), 输出结构化"裁判"报告:
+   - R:R check (≥ 1.5)
+   - 当前是否满足 BOS-reversal stage 1–7（用 `quant.strategies.bos_reversal` 跑当前 bar）
+   - Live spread vs P95
+   - News blackout check（依赖未来的 #4 calendar）
+   - Position sizing 推荐
+   - Cost 估算
+   - **必须同时调 `journal.log_skip(...)` 如果裁定 reject**
+
+2. **`live_analysis/live_scan.py`** — 拉最近 N 天 H4/H1/M15, 跑 strategy, 输出"现在每个 symbol 各处于哪个 stage"。回答"现在有没有正在 cooking 的 setup"
+
+3. **`live_analysis/monitor_positions.py`** — 15 min 轮询 open positions, 离 SL/TP 多少 pt, 是否该 trail, swap 累积, spread 异常告警
+
+4. **`fixtures/news_calendar.csv`** — 手维护 CPI/NFP/FOMC, eval_trade 交叉引用
+
+### 15.3 强约束（不要破）
+
+- **不要让任何脚本下真实 order**。所有执行用户手动在 MT5 GUI 完成；这些工具只是"副驾驶 / 裁判"。
+- **不要在 analyst-mode 里改 `quant/` 的策略代码**。策略已 frozen, 见 §8。
+  唯一允许的"修改" `quant/` 是修明确的 bug，要先告知用户。
+- **不要 evangelize 加 filter 或调参数**。如果 candidate 不符合规则，输出"不符合 + 哪条规则不过"，不要发明新规则去 fit。
+- 每笔 trade decision（无论 take / skip）都要进 journal。手动维护 journal = retail 失败的核心原因之一。
+
+### 15.4 测试 / 跑法
+
+```powershell
+# 跑 journal tests
+.\.venv\Scripts\python.exe -m pytest live_analysis/tests/ -v
+
+# 跑全套 (确认没动到 quant/)
+.\.venv\Scripts\python.exe -m pytest
+```
+
+当前: **129 passed**（116 quant + 13 journal）。

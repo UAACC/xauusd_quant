@@ -6,6 +6,9 @@
 *.feather
 *.h5
 
+# Live analyst-mode journal — trade records contain account / position info
+/live_analysis/data/
+
 # 凭据 — 永远不能入 git
 .env
 *.env
