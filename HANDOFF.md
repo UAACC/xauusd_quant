@@ -625,12 +625,34 @@ print(report.verdict)  # 'accept' or 'reject'
 for c in report.checks:
     print(c.status, c.name, c.label)
 
-# 2. 实时 — MT5 demo 抓 tick/spec/bars
+# 2. 实时 — MT5 demo 抓 multi-TF + cross-asset snapshot
 from live_analysis.eval_trade import pull_live_context, evaluate_trade
-ctx = pull_live_context("XAUUSD", months_back=2)  # 复用 scripts/mt5_connect.init_mt5 的 LIVE-abort 守卫
+ctx = pull_live_context("XAUUSD")  # 默认 7 TF (D1..M1) + 6 cross-asset
+# warm-cache 延迟 ~35ms (cold ~220ms 第一次 subscribe 跨 symbol)
+
+# Strategy rule check (只用 H4/H1/M15)
 report = evaluate_trade(symbol="XAUUSD", direction="long",
-    entry=..., sl=..., tp=..., **ctx)
+    entry=..., sl=..., tp=...,
+    h4_bars=ctx["bars"]["H4"], h1_bars=ctx["bars"]["H1"], m15_bars=ctx["bars"]["M15"],
+    live_spread_pts=ctx["live_spread_pts"],
+    account_balance=ctx["account_balance"],
+    contract_size=ctx["contract_size"], point=ctx["point"],
+    commission_roundtrip_usd_per_lot=ctx["commission_roundtrip_usd_per_lot"],
+    min_lot_step=ctx["min_lot_step"],
+)
+
+# Analyst commentary 读 ctx["bars"]["D1" / "M30" / "M5" / "M1"] + ctx["cross_asset"]
+# cross_asset[sym] = {bid, ask, spread_pts, last_close,
+#                     d1_change_pct, d5_change_pct, d20_change_pct, atr_d1_14}
 ```
+
+**`pull_live_context` 参数**:
+- `timeframes`: dict[str, pd.Timedelta], 默认 `DEFAULT_TIMEFRAME_LOOKBACKS` (D1=180d, H4=60d, H1=30d, M30=10d, M15=10d, M5=3d, M1=6h)
+- `cross_asset_symbols`: list[str], 默认 `DEFAULT_CROSS_ASSET_FOR_XAUUSD` = (EURUSD, US500, USTEC, XAGUSD, XTIUSD, BTCUSD)。空 list `[]` 跳过 cross-asset 拉取(~10ms 省)
+
+**IC Markets demo cross-asset 可用性**(2026-05-13 probed):
+- ✓ 有: EURUSD/GBPUSD/USDJPY/AUDUSD/USDCHF (majors) · US500/USTEC/UK100 (equity) · XAGUSD/XPTUSD/XPDUSD (precious) · XTIUSD/XBRUSD (oil) · BTCUSD/ETHUSD (crypto)
+- ✗ 无: DXY 直接 ticker (用 EURUSD 反向当 USD-strength proxy), 10Y yield, VIX, GER40, NAS100 (改名 USTEC)
 
 **CLI 用法**:
 
@@ -675,4 +697,4 @@ Exit code: 0 = accept, 1 = reject (脚本管线可用)。
 .\.venv\Scripts\python.exe -m pytest                            # 全套
 ```
 
-当前: **149 passed** (116 quant + 13 journal + 20 eval_trade)。
+当前: **152 passed** (116 quant + 13 journal + 23 eval_trade)。

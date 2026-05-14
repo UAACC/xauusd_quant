@@ -326,6 +326,45 @@ def test_accept_verdict_when_no_failures() -> None:
 # Real-data integration: the May 6 reference setup
 # ---------------------------------------------------------------------------
 
+def test_pull_live_context_rejects_unknown_timeframe() -> None:
+    """Bad TF name fails before any MT5 call (pure-function validation)."""
+    from live_analysis.eval_trade import pull_live_context
+
+    with pytest.raises(ValueError, match="unknown timeframes"):
+        pull_live_context(
+            "XAUUSD",
+            timeframes={"H4": pd.Timedelta(days=60), "BOGUS": pd.Timedelta(days=1)},
+        )
+
+
+def test_pull_live_context_default_timeframes_cover_all_7() -> None:
+    """The default lookback dict has the 7 standard TFs analyst commentary uses."""
+    from live_analysis.eval_trade import DEFAULT_TIMEFRAME_LOOKBACKS
+
+    assert set(DEFAULT_TIMEFRAME_LOOKBACKS.keys()) == {
+        "D1", "H4", "H1", "M30", "M15", "M5", "M1",
+    }
+    # D1 should have longest history; M1 the shortest
+    assert (
+        DEFAULT_TIMEFRAME_LOOKBACKS["D1"]
+        > DEFAULT_TIMEFRAME_LOOKBACKS["M15"]
+        > DEFAULT_TIMEFRAME_LOOKBACKS["M1"]
+    )
+
+
+def test_default_cross_asset_includes_required_axes() -> None:
+    """Cross-asset default must hit USD-direction, risk-on, precious confluence."""
+    from live_analysis.eval_trade import DEFAULT_CROSS_ASSET_FOR_XAUUSD
+
+    syms = set(DEFAULT_CROSS_ASSET_FOR_XAUUSD)
+    # USD direction proxy (since IC has no DXY)
+    assert "EURUSD" in syms
+    # Risk-regime indicator
+    assert "US500" in syms or "USTEC" in syms
+    # Precious confluence
+    assert "XAGUSD" in syms
+
+
 @pytest.mark.skipif(
     not (DATA_ROOT / "bars" / "XAUUSD" / "H4" / "2026" / "2026-05.parquet").exists(),
     reason="May 2026 XAUUSD parquet not present (data is gitignored)",
