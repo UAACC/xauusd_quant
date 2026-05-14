@@ -46,10 +46,10 @@ def _try_beep(freq: int = 880, dur_ms: int = 200, count: int = 3) -> None:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    from mt5_connect import init_mt5  # noqa: E402
+    from mt5_connect import init_mt5, init_mt5_live  # noqa: E402
     import MetaTrader5 as mt5  # noqa: E402
 
-    from quant.config import get_demo_mt5_path  # noqa: E402
+    from quant.config import get_demo_mt5_path, get_live_mt5_path  # noqa: E402
 
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--symbol", required=True)
@@ -65,12 +65,20 @@ def main(argv: Optional[list[str]] = None) -> int:
                    help="print 'still watching' status every N seconds (default 30)")
     p.add_argument("--no-beep", dest="beep", action="store_false",
                    help="suppress Windows system beep on alert")
+    p.add_argument("--live", action="store_true",
+                   help="connect to LIVE MT5 (default: demo). Read-only either way.")
     p.set_defaults(beep=True)
     args = p.parse_args(argv)
 
-    if not init_mt5(terminal_path=get_demo_mt5_path()):
-        print("[ERROR] MT5 init failed; ensure demo terminal is running + logged in")
-        return 1
+    if args.live:
+        connected = init_mt5_live(terminal_path=get_live_mt5_path(), allow_orders=False)
+        if not connected:
+            print("[ERROR] init_mt5_live failed; ensure live terminal logged in")
+            return 1
+    else:
+        if not init_mt5(terminal_path=get_demo_mt5_path()):
+            print("[ERROR] MT5 init failed; ensure demo terminal is running + logged in")
+            return 1
 
     if not mt5.symbol_select(args.symbol, True):
         print(f"[ERROR] symbol_select({args.symbol}) failed: {mt5.last_error()}")

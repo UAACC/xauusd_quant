@@ -642,10 +642,10 @@ def pull_live_context(
     from datetime import datetime as _dt, timezone as _tz
     _sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-    from mt5_connect import build_cost_model, get_symbol_info, init_mt5  # noqa: E402
+    from mt5_connect import build_cost_model, get_symbol_info, init_mt5_live  # noqa: E402
     import MetaTrader5 as mt5  # noqa: E402
 
-    from quant.config import get_demo_mt5_path  # noqa: E402
+    from quant.config import get_live_mt5_path  # noqa: E402
     from quant.data.broker_time import discover_clock  # noqa: E402
 
     # Resolve TF set: explicit > legacy months_back > default 7-TF
@@ -678,7 +678,9 @@ def pull_live_context(
         raise ValueError(f"unknown timeframes: {sorted(unknown)}; "
                          f"valid: {sorted(_tf_const_for)}")
 
-    if not init_mt5(terminal_path=get_demo_mt5_path()):
+    # Use init_mt5_live for read paths -- works on both demo and live accounts
+    # (no demo-only abort). allow_orders=False so no order_send capability.
+    if not init_mt5_live(terminal_path=get_live_mt5_path(), allow_orders=False):
         raise RuntimeError("MT5 init failed; see stderr for the underlying error")
 
     def _bars_to_df(rates, clock) -> pd.DataFrame:
@@ -832,9 +834,9 @@ def scan_symbols(
     from datetime import datetime as _dt, timezone as _tz
     _sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-    from mt5_connect import init_mt5  # noqa: E402
+    from mt5_connect import init_mt5_live  # noqa: E402
     import MetaTrader5 as mt5  # noqa: E402
-    from quant.config import get_demo_mt5_path  # noqa: E402
+    from quant.config import get_live_mt5_path  # noqa: E402
     from quant.data.broker_time import discover_clock  # noqa: E402
 
     if symbols is None:
@@ -851,7 +853,8 @@ def scan_symbols(
     if unknown:
         raise ValueError(f"unknown timeframes: {sorted(unknown)}")
 
-    if not init_mt5(terminal_path=get_demo_mt5_path()):
+    # Read-only live connection (works on demo too, no trade_mode abort)
+    if not init_mt5_live(terminal_path=get_live_mt5_path(), allow_orders=False):
         raise RuntimeError("MT5 init failed")
 
     try:
