@@ -270,6 +270,97 @@ def cancel_pending(*, ticket: int, terminal_path: Optional[str] = None) -> dict:
         mt5.shutdown()
 
 
+def modify_position_sltp(
+    *,
+    ticket: int,
+    sl: Optional[float] = None,
+    tp: Optional[float] = None,
+    terminal_path: Optional[str] = None,
+) -> dict:
+    """Modify SL and/or TP on an existing position.
+
+    This is a position MANAGEMENT operation, not opening a new trade. Does NOT
+    enforce the 0.02 lot ceiling (existing position can be any size the user
+    placed manually). Validates that the new SL/TP are on the correct side
+    relative to the position direction and current price.
+
+    Pass None for sl or tp to leave that field unchanged (uses current value).
+    """
+    if sl is None and tp is None:
+        raise ValueError("must specify at least one of sl or tp")
+
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    from mt5_connect import init_mt5_live  # noqa: E402
+    import MetaTrader5 as mt5  # noqa: E402
+    from quant.config import get_live_mt5_path  # noqa: E402
+
+    path = terminal_path or get_live_mt5_path()
+    if not init_mt5_live(terminal_path=path, allow_orders=True):
+        raise RuntimeError("MT5 init_mt5_live failed; cannot modify")
+    try:
+        positions = mt5.positions_get(ticket=int(ticket))
+        if not positions:
+            raise RuntimeError(f"position {ticket} not found")
+        pos = positions[0]
+
+        # Use position current SL/TP if caller didn't override
+        new_sl = float(sl) if sl is not None else float(pos.sl)
+        new_tp = float(tp) if tp is not None else float(pos.tp)
+
+        # Validate direction-aware: long requires SL < entry < TP; short inverse
+        # Use the position's CURRENT price for sanity (not entry) since position
+        # may already be in profit/loss.
+        if pos.type == mt5.POSITION_TYPE_BUY:
+            if new_sl > 0 and new_sl >= pos.price_current:
+                raise ValueError(
+                    f"LONG SL must be below current price ({pos.price_current:.5f}); "
+                    f"got {new_sl}"
+                )
+            if new_tp > 0 and new_tp <= pos.price_current:
+                raise ValueError(
+                    f"LONG TP must be above current price ({pos.price_current:.5f}); "
+                    f"got {new_tp}"
+                )
+        else:  # SELL
+            if new_sl > 0 and new_sl <= pos.price_current:
+                raise ValueError(
+                    f"SHORT SL must be above current price ({pos.price_current:.5f}); "
+                    f"got {new_sl}"
+                )
+            if new_tp > 0 and new_tp >= pos.price_current:
+                raise ValueError(
+                    f"SHORT TP must be below current price ({pos.price_current:.5f}); "
+                    f"got {new_tp}"
+                )
+
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "symbol": pos.symbol,
+            "position": int(ticket),
+            "sl": new_sl,
+            "tp": new_tp,
+        }
+        result = mt5.order_send(request)
+        if result is None:
+            raise RuntimeError(f"order_send (SLTP) None: {mt5.last_error()}")
+
+        return {
+            "status": "modified" if result.retcode == mt5.TRADE_RETCODE_DONE else "rejected",
+            "retcode": result.retcode,
+            "ticket": ticket,
+            "old_sl": float(pos.sl),
+            "new_sl": new_sl,
+            "old_tp": float(pos.tp),
+            "new_tp": new_tp,
+            "comment": result.comment,
+            "symbol": pos.symbol,
+            "volume": float(pos.volume),
+            "entry_price": float(pos.price_open),
+        }
+    finally:
+        mt5.shutdown()
+
+
 def close_position(*, ticket: int, terminal_path: Optional[str] = None) -> dict:
     """Close an open position by ticket. Hardcoded 0.02 lot wouldn't help
     here since we close the EXISTING position's volume (which should be 0.02
